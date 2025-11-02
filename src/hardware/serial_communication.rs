@@ -1,9 +1,8 @@
-use serialport::{available_ports, SerialPort, SerialPortType};
-use std::time::Duration;
-use std::io::{Read, Write};
-use std::sync::mpsc;
-use std::thread;
 use crate::utils::angle::AngleDMS;
+use serialport::{available_ports, SerialPort, SerialPortType};
+use std::time::{Duration, Instant};
+use thiserror::Error;
+use tokio::sync::{mpsc, oneshot, watch};
 
 #[derive(Debug, Clone)]
 pub enum ControllerCommand {
@@ -11,12 +10,19 @@ pub enum ControllerCommand {
     GetId,
     Home,
     SetZero,
-    /// Перемещение по оси X с указанием скорости
-    /// Формат команды: MOVE X=<mm> F=<mm/s>\n
-    Move { x_mm: f32, speed_mm_s: f32 },
-    /// Установка угла через энкодер
-    /// Формат команды: SETANG <deg|d:m:s>\n
-    SetAngle { angle: AngleDMS },
+    /// Перемещение по оси X с указанием скорости (MOVE X=<mm> F=<mm/s>)
+    Move {
+        x_mm: f32,
+        speed_mm_s: f32,
+    },
+    /// Установка угла через энкодер (SETANG <deg|d:m:s>)
+    SetAngle {
+        angle: AngleDMS,
+    },
+    /// Отправка произвольной команды, используется в отладочном режиме
+    Raw {
+        command: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -27,234 +33,428 @@ pub enum ControllerResponse {
     SetZeroComplete,
     MoveComplete,
     SetAngleComplete,
+    Raw(String),
     Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct SerialControllerConfig {
+    pub baud_rate: u32,
+    pub read_timeout: Duration,
+    pub write_timeout: Duration,
+    pub retries: usize,
+}
+
+impl Default for SerialControllerConfig {
+    fn default() -> Self {
+        Self {
+            baud_rate: 115_200,
+            read_timeout: Duration::from_millis(500),
+            write_timeout: Duration::from_millis(200),
+            retries: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ControllerStatus {
+    pub port_name: String,
+    pub connected: bool,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Error, Clone)]
+pub enum SerialError {
+    #[error("Serial port {0} not available")]
+    PortUnavailable(String),
+    #[error("Serial IO error: {0}")]
+    Io(String),
+    #[error("Controller timeout")]
+    Timeout,
+    #[error("Unexpected controller response: {0}")]
+    InvalidResponse(String),
+    #[error("Controller channel closed")]
+    ChannelClosed,
+    #[error("Failed to spawn controller worker: {0}")]
+    ThreadSpawn(String),
+}
+
+impl From<serialport::Error> for SerialError {
+    fn from(value: serialport::Error) -> Self {
+        match value.kind() {
+            serialport::ErrorKind::NoDevice => SerialError::PortUnavailable(value.to_string()),
+            serialport::ErrorKind::Io(std::io::ErrorKind::TimedOut) => SerialError::Timeout,
+            serialport::ErrorKind::Io(kind) => SerialError::Io(format!("{:?}", kind)),
+            _ => SerialError::Io(value.to_string()),
+        }
+    }
+}
+
+impl From<std::io::Error> for SerialError {
+    fn from(value: std::io::Error) -> Self {
+        if value.kind() == std::io::ErrorKind::TimedOut {
+            SerialError::Timeout
+        } else {
+            SerialError::Io(value.to_string())
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct SerialController {
     port_name: String,
-    baud_rate: u32,
-    sender: Option<mpsc::Sender<ControllerCommand>>,
-    receiver: Option<mpsc::Receiver<ControllerResponse>>,
+    config: SerialControllerConfig,
+    command_tx: mpsc::UnboundedSender<WorkerMessage>,
+    status_rx: watch::Receiver<ControllerStatus>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SerialController {
-    pub fn new(baud_rate: u32) -> Self {
-        Self {
-            port_name: String::new(),
-            baud_rate,
-            sender: None,
-            receiver: None,
-        }
-    }
-
     /// Auto-detect available COM ports, filtering out virtual ports
     pub fn detect_ports() -> Vec<String> {
         match available_ports() {
-            Ok(ports) => {
-                ports
-                    .into_iter()
-                    .filter(|port| {
-                        // Filter out virtual ports based on port type
-                        match &port.port_type {
-                            SerialPortType::UsbPort(_) => true,
-                            SerialPortType::PciPort => true,
-                            SerialPortType::BluetoothPort => false,
-                            SerialPortType::Unknown => {
-                                // For unknown types, check if it's likely a virtual port
-                                !port.port_name.contains("Virtual")
-                                    && !port.port_name.contains("COM_MAP")
-                                    && !port.port_name.contains("VCP")
-                            }
-                        }
-                    })
-                    .map(|port| port.port_name)
-                    .collect()
-            }
+            Ok(ports) => ports
+                .into_iter()
+                .filter(|port| match &port.port_type {
+                    SerialPortType::UsbPort(_) | SerialPortType::PciPort => true,
+                    SerialPortType::BluetoothPort => false,
+                    SerialPortType::Unknown => {
+                        !port.port_name.contains("Virtual")
+                            && !port.port_name.contains("COM_MAP")
+                            && !port.port_name.contains("VCP")
+                    }
+                })
+                .map(|port| port.port_name)
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
 
-    /// Connect to a specific port
-    pub fn connect(&mut self, port_name: &str) -> Result<(), String> {
-        // Create channels for command/response communication
-        let (cmd_tx, cmd_rx) = mpsc::channel::<ControllerCommand>();
-        let (resp_tx, resp_rx) = mpsc::channel::<ControllerResponse>();
+    /// Establishes an asynchronous controller connection.
+    pub async fn connect(
+        port_name: impl Into<String>,
+        config: SerialControllerConfig,
+    ) -> Result<Self, SerialError> {
+        let port_name = port_name.into();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let initial_status = ControllerStatus {
+            port_name: port_name.clone(),
+            connected: false,
+            last_error: None,
+        };
+        let (status_tx, status_rx) = watch::channel(initial_status);
+        let (handshake_tx, handshake_rx) = oneshot::channel();
 
-        // Store the sender and receiver
-        self.sender = Some(cmd_tx);
-        self.receiver = Some(resp_rx);
-        self.port_name = port_name.to_string();
+        let worker_port = port_name.clone();
+        let worker_config = config.clone();
+        let worker = std::thread::Builder::new()
+            .name(format!("serial-controller-{}", worker_port))
+            .spawn(move || {
+                worker_loop(worker_port, worker_config, cmd_rx, status_tx, handshake_tx);
+            })
+            .map_err(|e| SerialError::ThreadSpawn(e.to_string()))?;
 
-        // Spawn a thread to handle serial communication
-        let port_name = port_name.to_string();
-        let baud_rate = self.baud_rate;
-        
-        thread::spawn(move || {
-            // Attempt to open the serial port
-            let mut port = match serialport::new(&port_name, baud_rate)
-                .timeout(Duration::from_millis(1000))
-                .open() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("Failed to open serial port {}: {}", port_name, e);
-                        return;
-                    }
-                };
+        match handshake_rx.await {
+            Ok(Ok(())) => Ok(Self {
+                port_name,
+                config,
+                command_tx: cmd_tx,
+                status_rx,
+                join_handle: Some(worker),
+            }),
+            Ok(Err(err)) => {
+                let _ = worker.join();
+                Err(err)
+            }
+            Err(_) => {
+                let _ = worker.join();
+                Err(SerialError::ChannelClosed)
+            }
+        }
+    }
 
-            // Handle incoming commands
-            while let Ok(command) = cmd_rx.recv() {
-                let response = match command {
-                    ControllerCommand::Ping => {
-                        // Согласно ТЗ: команда PING\n → ожидание ответа PONG\n
-                        if let Err(e) = Self::send_command(&mut port, "PING") {
-                            ControllerResponse::Error(format!("PING failed: {}", e))
-                        } else {
-                            // Read response for ping
-                            match Self::read_response(&mut port) {
-                                Ok(response) if response.trim() == "PONG" => ControllerResponse::Pong,
-                                Ok(response) => ControllerResponse::Error(format!("Unexpected PING response: {}", response)),
-                                Err(e) => ControllerResponse::Error(format!("PING response error: {}", e)),
-                            }
-                        }
-                    }
-                    ControllerCommand::GetId => {
-                        if let Err(e) = Self::send_command(&mut port, "ID?") {
-                            ControllerResponse::Error(format!("ID? failed: {}", e))
-                        } else {
-                            match Self::read_response(&mut port) {
-                                Ok(response) => ControllerResponse::Id(response.trim().to_string()),
-                                Err(e) => ControllerResponse::Error(format!("ID? response error: {}", e)),
-                            }
-                        }
-                    }
-                    ControllerCommand::Home => {
-                        if let Err(e) = Self::send_command(&mut port, "HOME") {
-                            ControllerResponse::Error(format!("HOME failed: {}", e))
-                        } else {
-                            // HOME might take some time, so we might want to wait for a specific response
-                            match Self::read_response(&mut port) {
-                                Ok(response) if response.trim() == "HOMING_COMPLETE" => ControllerResponse::HomeComplete,
-                                Ok(response) => ControllerResponse::Error(format!("Unexpected HOME response: {}", response)),
-                                Err(e) => ControllerResponse::Error(format!("HOME response error: {}", e)),
-                            }
-                        }
-                    }
-                    ControllerCommand::SetZero => {
-                        if let Err(e) = Self::send_command(&mut port, "SETZERO") {
-                            ControllerResponse::Error(format!("SETZERO failed: {}", e))
-                        } else {
-                            match Self::read_response(&mut port) {
-                                Ok(response) if response.trim() == "ZERO_SET" => ControllerResponse::SetZeroComplete,
-                                Ok(response) => ControllerResponse::Error(format!("Unexpected SETZERO response: {}", response)),
-                                Err(e) => ControllerResponse::Error(format!("SETZERO response error: {}", e)),
-                            }
-                        }
-                    }
-                    ControllerCommand::Move { x_mm, speed_mm_s } => {
-                        // Формат согласно ТЗ: MOVE X=<mm> F=<mm/s>\n
-                        let command = format!("MOVE X={:.3} F={:.3}", x_mm, speed_mm_s);
-                        if let Err(e) = Self::send_command(&mut port, &command) {
-                            ControllerResponse::Error(format!("MOVE failed: {}", e))
-                        } else {
-                            match Self::read_response(&mut port) {
-                                Ok(response) if response.trim() == "MOVE_COMPLETE" || response.trim() == "OK" => ControllerResponse::MoveComplete,
-                                Ok(response) => ControllerResponse::Error(format!("Unexpected MOVE response: {}", response)),
-                                Err(e) => ControllerResponse::Error(format!("MOVE response error: {}", e)),
-                            }
-                        }
-                    }
-                    ControllerCommand::SetAngle { angle } => {
-                        // Формат согласно ТЗ: SETANG <deg|d:m:s>\n
-                        // Используем формат d:m:s
-                        let command = format!("SETANG {}", angle);
-                        if let Err(e) = Self::send_command(&mut port, &command) {
-                            ControllerResponse::Error(format!("SETANG failed: {}", e))
-                        } else {
-                            match Self::read_response(&mut port) {
-                                Ok(response) if response.trim() == "ANGLE_SET" || response.trim() == "OK" => ControllerResponse::SetAngleComplete,
-                                Ok(response) => ControllerResponse::Error(format!("Unexpected SETANG response: {}", response)),
-                                Err(e) => ControllerResponse::Error(format!("SETANG response error: {}", e)),
-                            }
-                        }
-                    }
-                };
+    /// Sends a command asynchronously and waits for the controller response.
+    pub async fn send_command(
+        &self,
+        command: ControllerCommand,
+    ) -> Result<ControllerResponse, SerialError> {
+        let (tx, rx) = oneshot::channel();
+        let envelope = CommandEnvelope {
+            command,
+            responder: tx,
+        };
+        self.command_tx
+            .send(WorkerMessage::Command(envelope))
+            .map_err(|_| SerialError::ChannelClosed)?;
 
-                // Send response back
-                if resp_tx.send(response).is_err() {
-                    // Channel closed, exit the thread
-                    break;
+        rx.await.map_err(|_| SerialError::ChannelClosed)?
+    }
+
+    /// Returns the latest status snapshot.
+    pub fn status(&self) -> ControllerStatus {
+        self.status_rx.borrow().clone()
+    }
+
+    /// Subscribes to status updates.
+    pub fn subscribe_status(&self) -> watch::Receiver<ControllerStatus> {
+        self.status_rx.clone()
+    }
+
+    /// Initiates a graceful shutdown of the controller worker.
+    pub async fn disconnect(&mut self) {
+        let _ = self.command_tx.send(WorkerMessage::Shutdown);
+        if let Some(handle) = self.join_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for SerialController {
+    fn drop(&mut self) {
+        let _ = self.command_tx.send(WorkerMessage::Shutdown);
+        if let Some(handle) = self.join_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+enum WorkerMessage {
+    Command(CommandEnvelope),
+    Shutdown,
+}
+
+struct CommandEnvelope {
+    command: ControllerCommand,
+    responder: oneshot::Sender<Result<ControllerResponse, SerialError>>,
+}
+
+fn worker_loop(
+    port_name: String,
+    config: SerialControllerConfig,
+    mut cmd_rx: mpsc::UnboundedReceiver<WorkerMessage>,
+    status_tx: watch::Sender<ControllerStatus>,
+    handshake_tx: oneshot::Sender<Result<(), SerialError>>,
+) {
+    let mut status = ControllerStatus {
+        port_name: port_name.clone(),
+        connected: false,
+        last_error: None,
+    };
+
+    match open_port(&port_name, &config) {
+        Ok(mut port) => {
+            status.connected = true;
+            let _ = status_tx.send(status.clone());
+            let _ = handshake_tx.send(Ok(()));
+            process_commands(port.as_mut(), config, &mut cmd_rx, status, status_tx);
+        }
+        Err(err) => {
+            status.last_error = Some(err.to_string());
+            let _ = status_tx.send(status);
+            let _ = handshake_tx.send(Err(err));
+        }
+    }
+}
+
+fn open_port(
+    port_name: &str,
+    config: &SerialControllerConfig,
+) -> Result<Box<dyn SerialPort>, SerialError> {
+    let mut builder = serialport::new(port_name, config.baud_rate);
+    builder = builder.timeout(config.read_timeout);
+    let mut port = builder.open().map_err(SerialError::from)?;
+    port.set_timeout(config.read_timeout)
+        .map_err(SerialError::from)?;
+    Ok(port)
+}
+
+fn process_commands(
+    port: &mut dyn SerialPort,
+    config: SerialControllerConfig,
+    cmd_rx: &mut mpsc::UnboundedReceiver<WorkerMessage>,
+    mut status: ControllerStatus,
+    status_tx: watch::Sender<ControllerStatus>,
+) {
+    while let Some(message) = cmd_rx.blocking_recv() {
+        match message {
+            WorkerMessage::Shutdown => break,
+            WorkerMessage::Command(CommandEnvelope { command, responder }) => {
+                let result =
+                    run_with_retries(&config, || execute_command(port, &config, command.clone()));
+
+                match &result {
+                    Ok(_) => status.last_error = None,
+                    Err(err) => status.last_error = Some(err.to_string()),
+                }
+
+                let _ = status_tx.send(status.clone());
+                let _ = responder.send(result);
+            }
+        }
+    }
+
+    status.connected = false;
+    let _ = status_tx.send(status);
+}
+
+fn run_with_retries<F>(
+    config: &SerialControllerConfig,
+    mut task: F,
+) -> Result<ControllerResponse, SerialError>
+where
+    F: FnMut() -> Result<ControllerResponse, SerialError>,
+{
+    let mut attempts = 0;
+    loop {
+        match task() {
+            Ok(response) => return Ok(response),
+            Err(err @ SerialError::PortUnavailable(_)) => return Err(err),
+            Err(err @ SerialError::ChannelClosed) => return Err(err),
+            Err(err) => {
+                attempts += 1;
+                if attempts > config.retries {
+                    return Err(err);
                 }
             }
-        });
+        }
+    }
+}
 
-        Ok(())
+fn execute_command(
+    port: &mut dyn SerialPort,
+    config: &SerialControllerConfig,
+    command: ControllerCommand,
+) -> Result<ControllerResponse, SerialError> {
+    match command {
+        ControllerCommand::Ping => {
+            send_line(port, "PING", config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            if response.trim().eq_ignore_ascii_case("PONG") {
+                Ok(ControllerResponse::Pong)
+            } else {
+                Ok(ControllerResponse::Error(format!(
+                    "Unexpected PING response: {}",
+                    response
+                )))
+            }
+        }
+        ControllerCommand::GetId => {
+            send_line(port, "ID?", config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            Ok(ControllerResponse::Id(response.trim().to_string()))
+        }
+        ControllerCommand::Home => {
+            send_line(port, "HOME", config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            if response.trim().eq_ignore_ascii_case("HOMING_COMPLETE") {
+                Ok(ControllerResponse::HomeComplete)
+            } else {
+                Ok(ControllerResponse::Error(format!(
+                    "Unexpected HOME response: {}",
+                    response
+                )))
+            }
+        }
+        ControllerCommand::SetZero => {
+            send_line(port, "SETZERO", config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            if response.trim().eq_ignore_ascii_case("ZERO_SET") {
+                Ok(ControllerResponse::SetZeroComplete)
+            } else {
+                Ok(ControllerResponse::Error(format!(
+                    "Unexpected SETZERO response: {}",
+                    response
+                )))
+            }
+        }
+        ControllerCommand::Move { x_mm, speed_mm_s } => {
+            let line = format!("MOVE X={:.3} F={:.3}", x_mm, speed_mm_s);
+            send_line(port, &line, config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            if matches_response(&response, &["MOVE_COMPLETE", "OK"]) {
+                Ok(ControllerResponse::MoveComplete)
+            } else {
+                Ok(ControllerResponse::Error(format!(
+                    "Unexpected MOVE response: {}",
+                    response
+                )))
+            }
+        }
+        ControllerCommand::SetAngle { angle } => {
+            let line = format!("SETANG {}", angle);
+            send_line(port, &line, config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            if matches_response(&response, &["ANGLE_SET", "OK"]) {
+                Ok(ControllerResponse::SetAngleComplete)
+            } else {
+                Ok(ControllerResponse::Error(format!(
+                    "Unexpected SETANG response: {}",
+                    response
+                )))
+            }
+        }
+        ControllerCommand::Raw { command } => {
+            send_line(port, &command, config.write_timeout)?;
+            let response = read_line(port, config.read_timeout)?;
+            Ok(ControllerResponse::Raw(response))
+        }
+    }
+}
+
+fn send_line(
+    port: &mut dyn SerialPort,
+    command: &str,
+    write_timeout: Duration,
+) -> Result<(), SerialError> {
+    let deadline = Instant::now() + write_timeout;
+    let mut bytes = command.as_bytes().to_vec();
+    bytes.push(b'\n');
+
+    port.write_all(&bytes).map_err(SerialError::from)?;
+    port.flush().map_err(SerialError::from)?;
+
+    if Instant::now() > deadline {
+        return Err(SerialError::Timeout);
     }
 
-    /// Send a command to the controller
-    fn send_command(port: &mut Box<dyn SerialPort>, command: &str) -> Result<(), String> {
-        let command_with_terminator = format!("{}\n", command);
-        port.write_all(command_with_terminator.as_bytes())
-            .map_err(|e| e.to_string())?;
-        port.flush().map_err(|e| e.to_string())?;
-        Ok(())
-    }
+    Ok(())
+}
 
-    /// Read response from the controller
-    fn read_response(port: &mut Box<dyn SerialPort>) -> Result<String, String> {
-        let mut response = String::new();
-        let mut buffer = [0; 1];
-        
-        // Read character by character until we get a newline
-        loop {
-            match port.read(&mut buffer) {
-                Ok(1) => {
-                    let ch = buffer[0] as char;
-                    if ch == '\n' || ch == '\r' {
-                        if !response.is_empty() {
-                            break; // End of response
+fn read_line(port: &mut dyn SerialPort, timeout: Duration) -> Result<String, SerialError> {
+    let deadline = Instant::now() + timeout;
+    let mut buffer = [0u8; 1];
+    let mut bytes = Vec::new();
+
+    loop {
+        match port.read(&mut buffer) {
+            Ok(n) if n > 0 => {
+                for &b in &buffer[..n] {
+                    if b == b'\n' || b == b'\r' {
+                        if !bytes.is_empty() {
+                            return Ok(String::from_utf8_lossy(&bytes).trim().to_string());
                         }
                     } else {
-                        response.push(ch);
+                        bytes.push(b);
                     }
                 }
-                Ok(_) => break, // No more data to read
-                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    // Continue reading, this is expected for non-blocking
-                    break;
-                }
-                Err(e) => return Err(e.to_string()),
             }
-        }
-        
-        Ok(response)
-    }
-
-    /// Send a command to the controller
-    pub fn send_controller_command(&self, command: ControllerCommand) -> Result<(), String> {
-        match &self.sender {
-            Some(sender) => sender.send(command).map_err(|e| e.to_string()),
-            None => Err("Not connected to controller".to_string()),
-        }
-    }
-
-    /// Receive a response from the controller
-    pub fn receive_response(&self) -> Result<ControllerResponse, String> {
-        match &self.receiver {
-            Some(receiver) => receiver.recv().map_err(|e| e.to_string()),
-            None => Err("Not connected to controller".to_string()),
+            Ok(_) => {
+                if Instant::now() >= deadline {
+                    return Err(SerialError::Timeout);
+                }
+            }
+            Err(ref err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                if Instant::now() >= deadline {
+                    return Err(SerialError::Timeout);
+                }
+            }
+            Err(err) => return Err(SerialError::from(err)),
         }
     }
+}
 
-    /// Check if connected to a controller
-    pub fn is_connected(&self) -> bool {
-        self.sender.is_some()
-    }
-
-    /// Disconnect from the controller
-    pub fn disconnect(&mut self) {
-        self.sender = None;
-        self.receiver = None;
-        self.port_name.clear();
-    }
+fn matches_response(actual: &str, expected: &[&str]) -> bool {
+    expected
+        .iter()
+        .any(|candidate| actual.trim().eq_ignore_ascii_case(candidate.trim()))
 }

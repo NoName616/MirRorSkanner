@@ -1,8 +1,8 @@
 // Кастомная тема оформления приложения
 
-use iced::{Theme, widget::button, Element};
 use super::messages::Message;
 use super::Tab;
+use iced::{widget::button, Element, Theme};
 
 /// Создает темную тему для приложения
 /// В Iced 0.12 кастомные темы создаются через расширение существующих
@@ -44,4 +44,3 @@ impl<'a> From<TabButton> for Element<'a, Message> {
             .into()
     }
 }
-

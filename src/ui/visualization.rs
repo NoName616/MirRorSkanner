@@ -1,5 +1,5 @@
 use iced::widget::{column, container, image, row, text, text_input};
-use iced::{Element, Length, theme};
+use iced::{theme, Element, Length};
 
 pub struct State {
     // Handle for the thermal data texture
@@ -53,7 +53,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .padding(10);
 
     let thermal_map = if let Some(thermal_texture) = &state.thermal_data_texture {
-        container(image(thermal_texture.clone()).width(Length::Fill).height(Length::Fill))
+        container(
+            image(thermal_texture.clone())
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
     } else {
         container(text("No data").size(30))
             .width(Length::Fill)

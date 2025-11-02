@@ -7,19 +7,19 @@ use thiserror::Error;
 pub enum AppError {
     #[error("Hardware error: {0}")]
     Hardware(#[from] HardwareError),
-    
+
     #[error("Config error: {0}")]
     Config(#[from] ConfigError),
-    
+
     #[error("Processing error: {0}")]
     Processing(#[from] ProcessingError),
-    
+
     #[error("Data error: {0}")]
     Data(#[from] DataError),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(String),
 }
@@ -29,19 +29,19 @@ pub enum AppError {
 pub enum HardwareError {
     #[error("Serial port error: {0}")]
     Serial(String),
-    
+
     #[error("Camera error: {0}")]
     Camera(String),
-    
+
     #[error("Controller not connected")]
     NotConnected,
-    
+
     #[error("Controller timeout")]
     Timeout,
-    
+
     #[error("Invalid command: {0}")]
     InvalidCommand(String),
-    
+
     #[error("Calibration failed: {0}")]
     CalibrationFailed(String),
 }
@@ -51,13 +51,13 @@ pub enum HardwareError {
 pub enum ConfigError {
     #[error("Config file not found: {0}")]
     NotFound(String),
-    
+
     #[error("Invalid config format: {0}")]
     InvalidFormat(String),
-    
+
     #[error("Config parameter missing: {0}")]
     MissingParameter(String),
-    
+
     #[error("Config parameter invalid: {0} = {1}")]
     InvalidParameter(String, String),
 }
@@ -67,13 +67,13 @@ pub enum ConfigError {
 pub enum ProcessingError {
     #[error("Trajectory generation failed: {0}")]
     TrajectoryGeneration(String),
-    
+
     #[error("Image analysis failed: {0}")]
     ImageAnalysis(String),
-    
+
     #[error("Calibration failed: {0}")]
     Calibration(String),
-    
+
     #[error("Invalid angle format: {0}")]
     InvalidAngleFormat(String),
 }
@@ -83,10 +83,10 @@ pub enum ProcessingError {
 pub enum DataError {
     #[error("Storage error: {0}")]
     Storage(String),
-    
+
     #[error("Export error: {0}")]
     Export(String),
-    
+
     #[error("Data format error: {0}")]
     Format(String),
 }
@@ -105,4 +105,3 @@ pub type ProcessingResult<T> = Result<T, ProcessingError>;
 
 /// Тип результата для данных
 pub type DataResult<T> = Result<T, DataError>;
-

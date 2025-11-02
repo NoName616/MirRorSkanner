@@ -1,9 +1,12 @@
-use iced::widget::{button, column, progress_bar, row, text, text_input, pick_list, checkbox};
-use iced::Element;
+use iced::widget::{button, checkbox, column, pick_list, progress_bar, row, text, text_input};
+use iced::{Command, Element};
 use std::f32::consts::PI;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 
-use crate::hardware::serial_communication::{SerialController, ControllerCommand};
+use crate::hardware::camera::{CameraMode, CameraService};
+use crate::hardware::serial_communication::SerialController;
+use crate::processing::scan_engine::{execute_scan, ScanError, ScanMeasurement};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ScanType {
@@ -36,10 +39,15 @@ pub struct State {
     center_x: f32,
     center_y: f32,
     calibrate_before_scan: bool,
-    serial_controller: Option<Arc<Mutex<SerialController>>>,
+    serial_controller: Option<Arc<SerialController>>,
+    camera_service: Option<Arc<CameraService>>,
     status_message: String,
     scan_positions: Vec<(f32, f32)>,
-    current_position_index: usize,
+    dwell_time_ms: u64,
+    capture_timeout_ms: u16,
+    move_speed_mm_s: f32,
+    fast_capture: bool,
+    last_results: Option<Vec<ScanMeasurement>>,
 }
 
 impl State {
@@ -59,107 +67,331 @@ impl State {
             center_y: 0.0,
             calibrate_before_scan: true,
             serial_controller: None,
+            camera_service: None,
             status_message: "Ready".to_string(),
             scan_positions: Vec::new(),
-            current_position_index: 0,
+            dwell_time_ms: 250,
+            capture_timeout_ms: 150,
+            move_speed_mm_s: 5.0,
+            fast_capture: true,
+            last_results: None,
         }
     }
 
-    pub fn set_serial_controller(&mut self, controller: Arc<Mutex<SerialController>>) {
+    pub fn set_serial_controller(&mut self, controller: Arc<SerialController>) {
         self.serial_controller = Some(controller);
     }
 
-    pub fn update(&mut self, message: Message) {
+    pub fn clear_serial_controller(&mut self) {
+        self.serial_controller = None;
+    }
+
+    pub fn set_camera_service(&mut self, service: Arc<CameraService>) {
+        self.camera_service = Some(service);
+    }
+
+    pub fn clear_camera_service(&mut self) {
+        self.camera_service = None;
+    }
+
+    pub fn update(&mut self, message: Message) -> Command<Message> {
         match message {
             Message::StartScan => {
-                // Generate scan positions based on selected scan type
-                self.scan_positions = self.generate_scan_positions();
-                self.current_position_index = 0;
-                self.scan_progress = 0.0;
-                self.is_scanning = true;
-                self.status_message = "Scanning...".to_string();
-                
-                // If we have a controller and need to calibrate
-                if let Some(ref controller) = self.serial_controller {
-                    if self.calibrate_before_scan {
-                        let _ = controller.lock().unwrap().send_controller_command(ControllerCommand::Home);
-                        // In a real implementation, we would wait for calibration to complete
-                        // before starting the scan
-                    }
-                    
-                    // Move to the first position if we have positions
-                    if !self.scan_positions.is_empty() {
-                        let (x, _y) = self.scan_positions[0];
-                        // Используем стандартную скорость 5 мм/с для сканирования
-                        let _ = controller.lock().unwrap().send_controller_command(
-                            ControllerCommand::Move { x_mm: x, speed_mm_s: 5.0 }
-                        );
-                        self.current_position_index = 1;
-                        if self.scan_positions.len() > 0 {
-                            self.scan_progress = 1.0 / self.scan_positions.len() as f32;
-                        }
-                    }
+                if self.is_scanning {
+                    self.status_message = "Scan already running".into();
+                    return Command::none();
                 }
+
+                let controller = match self.serial_controller.clone() {
+                    Some(controller) => controller,
+                    None => {
+                        self.status_message = "Controller not connected".into();
+                        return Command::none();
+                    }
+                };
+
+                let camera = match self.camera_service.clone() {
+                    Some(camera) => camera,
+                    None => {
+                        self.status_message = "Camera not connected".into();
+                        return Command::none();
+                    }
+                };
+
+                self.scan_positions = self.generate_scan_positions();
+                self.scan_progress = 0.0;
+                self.last_results = None;
+
+                if self.scan_positions.is_empty() {
+                    self.status_message = "No scan positions generated".into();
+                    return Command::none();
+                }
+
+                self.is_scanning = true;
+                self.status_message =
+                    format!("Scanning {} positions...", self.scan_positions.len());
+
+                let dwell = Duration::from_millis(self.dwell_time_ms);
+                let timeout = self.capture_timeout_ms;
+                let speed = self.move_speed_mm_s;
+                let calibrate = self.calibrate_before_scan;
+                let positions = self.scan_positions.clone();
+                let mode = self.current_camera_mode(&camera);
+
+                return Command::perform(
+                    execute_scan(
+                        controller, camera, positions, mode, dwell, speed, calibrate, timeout,
+                    ),
+                    Message::ScanFinished,
+                );
             }
             Message::StopScan => {
                 self.is_scanning = false;
                 self.status_message = "Scan stopped".to_string();
+                Command::none()
             }
             Message::ScanProgress(progress) => {
                 self.scan_progress = progress;
+                Command::none()
             }
             Message::UpdateStartX(x_str) => {
                 if let Ok(x) = x_str.parse::<f32>() {
                     self.start_x = x;
                 }
+                Command::none()
             }
             Message::UpdateStartY(y_str) => {
                 if let Ok(y) = y_str.parse::<f32>() {
                     self.start_y = y;
                 }
+                Command::none()
             }
             Message::UpdateEndX(x_str) => {
                 if let Ok(x) = x_str.parse::<f32>() {
                     self.end_x = x;
                 }
+                Command::none()
             }
             Message::UpdateEndY(y_str) => {
                 if let Ok(y) = y_str.parse::<f32>() {
                     self.end_y = y;
                 }
+                Command::none()
             }
             Message::UpdateStepSize(step_str) => {
                 if let Ok(step) = step_str.parse::<f32>() {
                     self.step_size = step;
                 }
+                Command::none()
             }
             Message::UpdateRadius(radius_str) => {
                 if let Ok(radius) = radius_str.parse::<f32>() {
                     self.radius = radius;
                 }
+                Command::none()
             }
             Message::UpdateAngularStep(step_str) => {
                 if let Ok(step) = step_str.parse::<f32>() {
                     self.angular_step = step;
                 }
+                Command::none()
             }
             Message::UpdateCenterX(x_str) => {
                 if let Ok(x) = x_str.parse::<f32>() {
                     self.center_x = x;
                 }
+                Command::none()
             }
             Message::UpdateCenterY(y_str) => {
                 if let Ok(y) = y_str.parse::<f32>() {
                     self.center_y = y;
                 }
+                Command::none()
             }
             Message::ScanTypeChanged(scan_type) => {
                 self.scan_type = scan_type;
+                Command::none()
             }
             Message::ToggleCalibrateBeforeScan(value) => {
                 self.calibrate_before_scan = value;
+                Command::none()
+            }
+            Message::UpdateDwellMs(value) => {
+                if let Ok(ms) = value.parse::<u64>() {
+                    self.dwell_time_ms = ms;
+                }
+                Command::none()
+            }
+            Message::UpdateCaptureTimeout(value) => {
+                if let Ok(ms) = value.parse::<u16>() {
+                    self.capture_timeout_ms = ms.max(50);
+                }
+                Command::none()
+            }
+            Message::UpdateMoveSpeed(value) => {
+                if let Ok(speed) = value.parse::<f32>() {
+                    self.move_speed_mm_s = speed.clamp(0.1, 50.0);
+                }
+                Command::none()
+            }
+            Message::ToggleFastCapture(value) => {
+                self.fast_capture = value;
+                Command::none()
+            }
+            Message::ScanFinished(result) => {
+                self.is_scanning = false;
+                match result {
+                    Ok(measurements) => {
+                        self.scan_progress = 1.0;
+                        self.status_message =
+                            format!("Scan complete: {} frames captured", measurements.len());
+                        self.last_results = Some(measurements);
+                    }
+                    Err(err) => {
+                        self.status_message = format!("Scan failed: {}", err);
+                        self.last_results = None;
+                    }
+                }
+                Command::none()
             }
         }
+    }
+
+    pub fn view(&self) -> Element<Message> {
+        let scan_bounds = row![
+            column![
+                text("Start X"),
+                text_input("Start X", &self.start_x.to_string()).on_input(Message::UpdateStartX),
+            ]
+            .spacing(4),
+            column![
+                text("Start Y"),
+                text_input("Start Y", &self.start_y.to_string()).on_input(Message::UpdateStartY),
+            ]
+            .spacing(4),
+            column![
+                text("End X"),
+                text_input("End X", &self.end_x.to_string()).on_input(Message::UpdateEndX),
+            ]
+            .spacing(4),
+            column![
+                text("End Y"),
+                text_input("End Y", &self.end_y.to_string()).on_input(Message::UpdateEndY),
+            ]
+            .spacing(4),
+            column![
+                text("Step"),
+                text_input("Step", &self.step_size.to_string()).on_input(Message::UpdateStepSize),
+            ]
+            .spacing(4),
+        ]
+        .spacing(16);
+
+        let geometry_controls = row![
+            column![
+                text("Scan Type"),
+                pick_list(
+                    vec![ScanType::Grid, ScanType::ConcentricCircle, ScanType::Spiral],
+                    Some(self.scan_type.clone()),
+                    Message::ScanTypeChanged,
+                ),
+            ]
+            .spacing(4),
+            column![
+                text("Radius"),
+                text_input("Radius", &self.radius.to_string()).on_input(Message::UpdateRadius),
+            ]
+            .spacing(4),
+            column![
+                text("Angular Step"),
+                text_input("Angular", &self.angular_step.to_string())
+                    .on_input(Message::UpdateAngularStep),
+            ]
+            .spacing(4),
+            column![
+                text("Center X"),
+                text_input("Center X", &self.center_x.to_string()).on_input(Message::UpdateCenterX),
+            ]
+            .spacing(4),
+            column![
+                text("Center Y"),
+                text_input("Center Y", &self.center_y.to_string()).on_input(Message::UpdateCenterY),
+            ]
+            .spacing(4),
+        ]
+        .spacing(16);
+
+        let start_button = if self.is_scanning {
+            button("Scanning...").style(iced::theme::Button::Primary)
+        } else {
+            button("Start Scan")
+                .on_press(Message::StartScan)
+                .style(iced::theme::Button::Primary)
+        };
+
+        let execution_controls = row![
+            start_button,
+            button("Stop Scan")
+                .on_press(Message::StopScan)
+                .style(iced::theme::Button::Destructive),
+            checkbox("Calibrate before scan", self.calibrate_before_scan)
+                .on_toggle(Message::ToggleCalibrateBeforeScan),
+            checkbox("Fast capture", self.fast_capture).on_toggle(Message::ToggleFastCapture),
+        ]
+        .spacing(16);
+
+        let timing_controls = row![
+            column![
+                text("Dwell (ms)"),
+                text_input("Dwell", &self.dwell_time_ms.to_string())
+                    .on_input(Message::UpdateDwellMs),
+            ]
+            .spacing(4),
+            column![
+                text("Capture timeout (ms)"),
+                text_input("Timeout", &self.capture_timeout_ms.to_string())
+                    .on_input(Message::UpdateCaptureTimeout),
+            ]
+            .spacing(4),
+            column![
+                text("Move speed (mm/s)"),
+                text_input("Speed", &format!("{:.1}", self.move_speed_mm_s))
+                    .on_input(Message::UpdateMoveSpeed),
+            ]
+            .spacing(4),
+        ]
+        .spacing(16);
+
+        let mut layout = column![
+            text("Scan Parameters"),
+            scan_bounds,
+            geometry_controls,
+            execution_controls,
+            timing_controls,
+            progress_bar(0.0..=1.0, self.scan_progress),
+            text(format!("Status: {}", self.status_message.clone())),
+        ]
+        .spacing(16);
+
+        if let Some(results) = &self.last_results {
+            let frames = results.len();
+            let mut summary = column![text(format!(
+                "Last scan captured {frames} frame{}",
+                if frames == 1 { "" } else { "s" }
+            ))]
+            .spacing(4);
+
+            if let Some(last) = results.last() {
+                summary = summary.push(text(format!(
+                    "Last frame span: {:.2} degC .. {:.2} degC",
+                    last.frame.min_temp, last.frame.max_temp
+                )));
+            }
+
+            layout = layout.push(summary);
+        }
+
+        layout.into()
     }
 
     // Generate positions for scanning based on the selected scan type
@@ -204,7 +436,8 @@ impl State {
     fn generate_concentric_circle_positions(&self) -> Vec<(f32, f32)> {
         let mut positions = Vec::new();
         let angular_step_rad = self.angular_step.to_radians();
-        let max_radius = ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
+        let max_radius =
+            ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
         let num_radii = (max_radius / self.step_size) as usize;
 
         for i in 1..=num_radii {
@@ -233,7 +466,8 @@ impl State {
     fn generate_spiral_positions(&self) -> Vec<(f32, f32)> {
         let mut positions = Vec::new();
         let angular_step_rad = self.angular_step.to_radians();
-        let max_radius = ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
+        let max_radius =
+            ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
         let mut radius = self.step_size;
         let mut angle = 0.0f32;
 
@@ -251,6 +485,14 @@ impl State {
         }
 
         positions
+    }
+
+    fn current_camera_mode(&self, camera: &Arc<CameraService>) -> CameraMode {
+        if self.fast_capture {
+            CameraMode::Fast(camera.default_fast_settings())
+        } else {
+            CameraMode::Precise(camera.default_precise_settings())
+        }
     }
 }
 
@@ -270,60 +512,13 @@ pub enum Message {
     UpdateCenterY(String),
     ScanTypeChanged(ScanType),
     ToggleCalibrateBeforeScan(bool),
+    UpdateDwellMs(String),
+    UpdateCaptureTimeout(String),
+    UpdateMoveSpeed(String),
+    ToggleFastCapture(bool),
+    ScanFinished(Result<Vec<ScanMeasurement>, ScanError>),
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
-    let scan_type_picklist = pick_list(
-        [ScanType::Grid, ScanType::ConcentricCircle, ScanType::Spiral],
-        Some(state.scan_type.clone()),
-        Message::ScanTypeChanged,
-    );
-
-    let params = column![
-        text("Scan Parameters"),
-        row![
-            text("Scan Type:").width(iced::Length::FillPortion(1)),
-            scan_type_picklist.width(iced::Length::FillPortion(2)),
-        ].spacing(10),
-        text_input("Start X", &format!("{:.2}", state.start_x)).on_input(Message::UpdateStartX),
-        text_input("Start Y", &format!("{:.2}", state.start_y)).on_input(Message::UpdateStartY),
-        text_input("End X", &format!("{:.2}", state.end_x)).on_input(Message::UpdateEndX),
-        text_input("End Y", &format!("{:.2}", state.end_y)).on_input(Message::UpdateEndY),
-        text_input("Step Size", &format!("{:.2}", state.step_size)).on_input(Message::UpdateStepSize),
-    ]
-    .spacing(10);
-
-    // Additional parameters for concentric circle and spiral scans
-    let additional_params = if state.scan_type == ScanType::ConcentricCircle || state.scan_type == ScanType::Spiral {
-        column![
-            text("Circle/Spiral Parameters"),
-            text_input("Radius", &format!("{:.2}", state.radius)).on_input(Message::UpdateRadius),
-            text_input("Angular Step (deg)", &format!("{:.2}", state.angular_step)).on_input(Message::UpdateAngularStep),
-            text_input("Center X", &format!("{:.2}", state.center_x)).on_input(Message::UpdateCenterX),
-            text_input("Center Y", &format!("{:.2}", state.center_y)).on_input(Message::UpdateCenterY),
-        ].spacing(10)
-    } else {
-        column![].spacing(10)
-    };
-
-    let controls = column![
-        button("Start Scan").on_press(Message::StartScan),
-        button("Stop Scan").on_press(Message::StopScan),
-        checkbox("Calibrate before scan", state.calibrate_before_scan).on_toggle(Message::ToggleCalibrateBeforeScan),
-        text(format!("Status: {}", state.status_message)),
-        text(format!("Progress: {:.0}%", state.scan_progress * 100.0)),
-        progress_bar(0.0..=1.0, state.scan_progress),
-        text(format!("Total positions: {}", state.scan_positions.len())),
-    ]
-    .spacing(10);
-
-    let layout = column![
-        params,
-        additional_params,
-        controls,
-    ]
-    .spacing(10)
-    .padding(10);
-
-    layout.into()
+    state.view()
 }

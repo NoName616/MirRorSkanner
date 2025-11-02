@@ -53,9 +53,11 @@ impl DeduplicationSystem {
     pub fn is_duplicate(&self, measurement: &TemperatureMeasurement) -> bool {
         let now = SystemTime::now();
         let time_threshold = Duration::from_millis(self.time_window_ms);
-        
+
         // Удаляем старые записи
-        let recent_history: Vec<_> = self.history.iter()
+        let recent_history: Vec<_> = self
+            .history
+            .iter()
             .filter(|(_, timestamp)| {
                 now.duration_since(*timestamp).unwrap_or(Duration::ZERO) < time_threshold
             })
@@ -66,12 +68,12 @@ impl DeduplicationSystem {
             let dx = hist_measurement.pixel_x as f64 - measurement.pixel_x as f64;
             let dy = hist_measurement.pixel_y as f64 - measurement.pixel_y as f64;
             let distance = (dx * dx + dy * dy).sqrt();
-            
+
             if distance <= self.spatial_radius {
                 // Проверяем температурное совпадение
                 let temp_diff_min = (hist_measurement.temp_min - measurement.temp_min).abs();
                 let temp_diff_max = (hist_measurement.temp_max - measurement.temp_max).abs();
-                
+
                 if temp_diff_min < 0.1 && temp_diff_max < 0.1 {
                     return true; // Дубликат найден
                 }
@@ -84,10 +86,11 @@ impl DeduplicationSystem {
     /// Добавляет измерение в историю
     pub fn add_measurement(&mut self, measurement: TemperatureMeasurement) {
         let now = SystemTime::now();
-        
+
         // Очищаем старые записи
         self.history.retain(|(_, timestamp)| {
-            now.duration_since(*timestamp).unwrap_or(Duration::ZERO) < Duration::from_millis(self.time_window_ms)
+            now.duration_since(*timestamp).unwrap_or(Duration::ZERO)
+                < Duration::from_millis(self.time_window_ms)
         });
 
         // Добавляем новое измерение
@@ -122,11 +125,30 @@ impl FastImageAnalyzer {
         }
     }
 
+    /// Создает быстрый анализатор с заданным коэффициентом даунсэмплинга
+    pub fn with_downscale_factor(factor: u32) -> Self {
+        let factor = factor.max(1);
+        Self {
+            downscale_factor: factor,
+        }
+    }
+
+    /// Возвращает текущий коэффициент даунсэмплинга
+    pub fn downscale_factor(&self) -> u32 {
+        self.downscale_factor
+    }
+
     /// Анализирует изображение в быстром режиме
     /// Возвращает минимальную и максимальную температуру из ROI
-    pub fn analyze_fast(&self, image_data: &[f32], width: u32, height: u32, roi: Option<(u32, u32, u32, u32)>) -> (f32, f32) {
+    pub fn analyze_fast(
+        &self,
+        image_data: &[f32],
+        width: u32,
+        height: u32,
+        roi: Option<(u32, u32, u32, u32)>,
+    ) -> (f32, f32) {
         let (roi_x, roi_y, roi_w, roi_h) = roi.unwrap_or((0, 0, width, height));
-        
+
         let mut min_temp = f32::MAX;
         let mut max_temp = f32::MIN;
 
@@ -158,14 +180,27 @@ impl PreciseImageAnalyzer {
         }
     }
 
+    /// Создает точный анализатор с заданным размером медианного ядра
+    pub fn with_kernel_size(size: u32) -> Self {
+        let size = if size % 2 == 0 { size + 1 } else { size }.max(1);
+        Self {
+            median_kernel_size: size,
+        }
+    }
+
+    /// Возвращает размер медианного ядра
+    pub fn kernel_size(&self) -> u32 {
+        self.median_kernel_size
+    }
+
     /// Анализирует изображение в точном режиме
     pub fn analyze_precise(&self, image_data: &[f32], width: u32, height: u32) -> (f32, f32) {
         // Применяем медианную фильтрацию
         let filtered = self.apply_median_filter(image_data, width, height);
-        
+
         let min_temp = filtered.iter().copied().fold(f32::MAX, f32::min);
         let max_temp = filtered.iter().copied().fold(f32::MIN, f32::max);
-        
+
         (min_temp, max_temp)
     }
 
@@ -177,12 +212,12 @@ impl PreciseImageAnalyzer {
         for y in 0..height as i32 {
             for x in 0..width as i32 {
                 let mut values = Vec::new();
-                
+
                 for ky in -kernel_half..=kernel_half {
                     for kx in -kernel_half..=kernel_half {
                         let px = x + kx;
                         let py = y + ky;
-                        
+
                         if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
                             let idx = (py * width as i32 + px) as usize;
                             if idx < image_data.len() {
@@ -191,7 +226,7 @@ impl PreciseImageAnalyzer {
                         }
                     }
                 }
-                
+
                 let idx = (y * width as i32 + x) as usize;
                 if idx < filtered.len() && !values.is_empty() {
                     values.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -211,7 +246,7 @@ mod tests {
     #[test]
     fn test_deduplication_spatial() {
         let mut system = DeduplicationSystem::new(2.0, 100);
-        
+
         let meas1 = TemperatureMeasurement {
             x_mm: 0.0,
             y_mm: 0.0,
@@ -222,7 +257,7 @@ mod tests {
             pixel_x: 100,
             pixel_y: 100,
         };
-        
+
         let meas2 = TemperatureMeasurement {
             x_mm: 0.0,
             y_mm: 0.0,
@@ -233,9 +268,8 @@ mod tests {
             pixel_x: 101, // В пределах радиуса
             pixel_y: 100,
         };
-        
+
         assert!(system.check_and_add(meas1.clone()));
         assert!(!system.check_and_add(meas2)); // Должен быть дубликатом
     }
 }
-

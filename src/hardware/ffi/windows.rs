@@ -1,7 +1,6 @@
-#![allow(dead_code)]
-use std::ffi::{c_void, c_long};
-use std::os::windows::ffi::OsStrExt;
 use std::ffi::OsStr;
+use std::ffi::{c_long, c_void};
+use std::os::windows::ffi::OsStrExt;
 
 // Manually define Windows types that were causing issues with bindgen
 pub type HRESULT = c_long;
@@ -46,46 +45,65 @@ pub struct FrameMetadata {
     pub pif_in: [u16; 2],
 }
 
-// FFI bindings
 #[link(name = "ImagerIPC2x64")]
-unsafe extern "C" {
+extern "C" {
     // Initialization and Lifecycle
-    pub fn InitImagerIPC(index: WORD) -> HRESULT;
-    pub fn InitNamedImagerIPC(index: WORD, instance_name: *const u16) -> HRESULT;
-    pub fn RunImagerIPC(index: WORD) -> HRESULT;
-    pub fn StartImagerIPC(index: WORD) -> HRESULT;
-    pub fn ReleaseImagerIPC(index: WORD) -> HRESULT;
-    pub fn CloseApplication(index: WORD);
+    fn InitImagerIPC(index: WORD) -> HRESULT;
+    fn InitNamedImagerIPC(index: WORD, instance_name: *const u16) -> HRESULT;
+    fn RunImagerIPC(index: WORD) -> HRESULT;
+    fn StartImagerIPC(index: WORD) -> HRESULT;
+    fn ReleaseImagerIPC(index: WORD) -> HRESULT;
+    fn CloseApplication(index: WORD);
 
     // Frame Acquisition
-    pub fn GetFrameConfig(index: WORD, width: *mut i32, height: *mut i32, depth: *mut i32) -> HRESULT;
-    pub fn GetVisibleFrameConfig(index: WORD, width: *mut i32, height: *mut i32, depth: *mut i32) -> HRESULT;
-    pub fn GetFrame(index: WORD, timeout: WORD, buffer: *mut c_void, size: DWORD, metadata: *mut FrameMetadata) -> HRESULT;
-    pub fn GetVisibleFrame(index: WORD, timeout: WORD, buffer: *mut c_void, size: DWORD, metadata: *mut FrameMetadata) -> HRESULT;
-    pub fn AcknowledgeFrame(index: WORD) -> HRESULT;
+    fn GetFrameConfig(index: WORD, width: *mut i32, height: *mut i32, depth: *mut i32) -> HRESULT;
+    fn GetVisibleFrameConfig(
+        index: WORD,
+        width: *mut i32,
+        height: *mut i32,
+        depth: *mut i32,
+    ) -> HRESULT;
+    fn GetFrame(
+        index: WORD,
+        timeout: WORD,
+        buffer: *mut c_void,
+        size: DWORD,
+        metadata: *mut FrameMetadata,
+    ) -> HRESULT;
+    fn GetVisibleFrame(
+        index: WORD,
+        timeout: WORD,
+        buffer: *mut c_void,
+        size: DWORD,
+        metadata: *mut FrameMetadata,
+    ) -> HRESULT;
+    fn AcknowledgeFrame(index: WORD) -> HRESULT;
 
     // Logging
-    pub fn SetLogFile(filename: *const u16, log_level: i32, append: BOOL) -> HRESULT;
-    pub fn SetLogging(log_groups: i32) -> HRESULT;
-    pub fn Log(index: WORD, logstring: *const i8, log_level: i32) -> HRESULT;
+    fn SetLogFile(filename: *const u16, log_level: i32, append: BOOL) -> HRESULT;
+    fn SetLogging(log_groups: i32) -> HRESULT;
+    fn Log(index: WORD, logstring: *const i8, log_level: i32) -> HRESULT;
 
     // Temperature and Device Info
-    pub fn GetTempChip(index: WORD) -> f32;
-    pub fn GetTempFlag(index: WORD) -> f32;
-    pub fn GetTempBox(index: WORD) -> f32;
-    pub fn GetSerialNumber(index: WORD) -> ULONG;
+    fn GetTempChip(index: WORD) -> f32;
+    fn GetTempFlag(index: WORD) -> f32;
+    fn GetTempBox(index: WORD) -> f32;
+    fn GetSerialNumber(index: WORD) -> ULONG;
 
     // Control and Configuration
-    pub fn SetFlag(index: WORD, value: bool) -> bool;
-    pub fn GetFlag(index: WORD) -> bool;
-    pub fn ResetFlag(index: WORD);
-    pub fn SetIPCMode(index: WORD, value: USHORT) -> USHORT;
-    pub fn GetIPCMode(index: WORD) -> USHORT;
+    fn SetFlag(index: WORD, value: bool) -> bool;
+    fn GetFlag(index: WORD) -> bool;
+    fn ResetFlag(index: WORD);
+    fn SetIPCMode(index: WORD, value: USHORT) -> USHORT;
+    fn GetIPCMode(index: WORD) -> USHORT;
 }
 
 // Helper function to convert Rust string to wide string for Windows API
 pub fn to_wide_string(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 // Wrapper functions for easier usage
@@ -179,11 +197,9 @@ pub fn get_frame_config(index: u16) -> Result<(i32, i32, i32), HRESULT> {
     let mut width = 0i32;
     let mut height = 0i32;
     let mut depth = 0i32;
-    
-    let result = unsafe {
-        GetFrameConfig(index, &mut width, &mut height, &mut depth)
-    };
-    
+
+    let result = unsafe { GetFrameConfig(index, &mut width, &mut height, &mut depth) };
+
     if result >= 0 {
         Ok((width, height, depth))
     } else {
@@ -206,7 +222,7 @@ pub fn get_frame(
             metadata,
         )
     };
-    
+
     if result >= 0 {
         Ok(())
     } else {
@@ -217,7 +233,7 @@ pub fn get_frame(
 pub fn set_log_file(filename: &str, log_level: i32, append: bool) -> Result<(), HRESULT> {
     let wide_filename = to_wide_string(filename);
     let result = unsafe { SetLogFile(wide_filename.as_ptr(), log_level, append as BOOL) };
-    
+
     if result >= 0 {
         Ok(())
     } else {

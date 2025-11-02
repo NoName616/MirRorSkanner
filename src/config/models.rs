@@ -50,7 +50,7 @@ pub struct CameraCalibrationConfig {
 pub struct CameraCalibrationSettings {
     pub model: String,
     pub transform: Vec<f64>, // Матрица 3x3 сериализованная как 9 элементов
-    pub roi: String, // Формат "x0,y0,w,h"
+    pub roi: String,         // Формат "x0,y0,w,h"
     pub cell_size_px: u32,
     pub version: u32,
 }
@@ -121,4 +121,3 @@ impl Default for ControllerCalibrationConfig {
         }
     }
 }
-

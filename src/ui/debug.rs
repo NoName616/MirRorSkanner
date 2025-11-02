@@ -1,5 +1,5 @@
 use iced::widget::{button, column, container, scrollable, text};
-use iced::{Element, Length, theme};
+use iced::{theme, Element, Length};
 
 pub struct State {
     log_messages: Vec<String>,
@@ -39,13 +39,20 @@ pub fn view(state: &State) -> Element<'_, Message> {
         text("No log messages.").into()
     } else {
         scrollable(
-            state.log_messages.iter().fold(column![], |col, msg| col.push(text(msg)))
-        ).into()
+            state
+                .log_messages
+                .iter()
+                .fold(column![], |col, msg| col.push(text(msg))),
+        )
+        .into()
     };
 
     let controls = column![
         button("Clear Log").on_press(Message::ClearLog),
-        container(log_output).width(Length::Fill).height(Length::Fill).style(theme::Container::Box),
+        container(log_output)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::Container::Box),
     ]
     .spacing(10)
     .padding(10);
