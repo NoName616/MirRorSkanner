@@ -63,4 +63,3 @@ mod tests {
         assert!((result - 400.0).abs() < 0.001);
     }
 }
-

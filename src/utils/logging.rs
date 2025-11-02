@@ -1,10 +1,10 @@
 // Структурированное логирование с ротацией файлов
 
+use chrono::Local;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use chrono::Local;
 
 /// Менеджер логирования с поддержкой ротации файлов
 pub struct LogManager {
@@ -26,7 +26,7 @@ impl LogManager {
     /// Создает новый менеджер логирования
     pub fn new(logs_dir: impl AsRef<Path>) -> io::Result<Self> {
         let logs_dir = logs_dir.as_ref().to_path_buf();
-        
+
         // Создаем директорию логов, если не существует
         std::fs::create_dir_all(&logs_dir)?;
 
@@ -73,7 +73,7 @@ impl LogManager {
         message: &str,
     ) -> io::Result<()> {
         let mut log_file = log_file.lock().unwrap();
-        
+
         // Проверяем, нужно ли делать ротацию
         if log_file.current_size >= log_file.max_size {
             log_file.rotate()?;
@@ -100,7 +100,7 @@ impl LogManager {
     /// Очищает старые лог-файлы (старше указанного количества дней)
     pub fn clean_old_logs(&self, days: u32) -> io::Result<()> {
         let cutoff_time = chrono::Local::now() - chrono::Duration::days(days as i64);
-        
+
         // Ищем все .log и .log.gz файлы в директории логов
         if let Ok(entries) = std::fs::read_dir(&self.logs_dir) {
             for entry in entries.flatten() {
@@ -110,7 +110,8 @@ impl LogManager {
                         if ext == "log" || ext == "gz" {
                             if let Ok(metadata) = path.metadata() {
                                 if let Ok(modified) = metadata.modified() {
-                                    let modified_time = chrono::DateTime::<chrono::Local>::from(modified);
+                                    let modified_time =
+                                        chrono::DateTime::<chrono::Local>::from(modified);
                                     if modified_time < cutoff_time {
                                         std::fs::remove_file(&path)?;
                                     }
@@ -149,8 +150,16 @@ impl LogFile {
 
         // Создаем имя архивного файла с timestamp
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-        let archive_name = format!("{}.{}", self.path.file_stem().unwrap().to_string_lossy(), timestamp);
-        let archive_path = self.path.parent().unwrap().join(format!("{}.log.gz", archive_name));
+        let archive_name = format!(
+            "{}.{}",
+            self.path.file_stem().unwrap().to_string_lossy(),
+            timestamp
+        );
+        let archive_path = self
+            .path
+            .parent()
+            .unwrap()
+            .join(format!("{}.log.gz", archive_name));
 
         // Читаем содержимое файла
         let contents = std::fs::read(&self.path)?;
@@ -197,7 +206,10 @@ static GLOBAL_LOG_MANAGER: std::sync::OnceLock<Arc<LogManager>> = std::sync::Onc
 pub fn init_log_manager(logs_dir: impl AsRef<Path>) -> io::Result<()> {
     let manager = Arc::new(LogManager::new(logs_dir)?);
     GLOBAL_LOG_MANAGER.set(manager).map_err(|_| {
-        io::Error::new(io::ErrorKind::AlreadyExists, "Log manager already initialized")
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Log manager already initialized",
+        )
     })?;
     Ok(())
 }
@@ -234,4 +246,3 @@ macro_rules! log_app {
         }
     };
 }
-

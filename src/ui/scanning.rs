@@ -1,9 +1,9 @@
-use iced::widget::{button, column, progress_bar, row, text, text_input, pick_list, checkbox};
+use iced::widget::{button, checkbox, column, pick_list, progress_bar, row, text, text_input};
 use iced::Element;
 use std::f32::consts::PI;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use crate::hardware::serial_communication::{SerialController, ControllerCommand};
+use crate::hardware::serial_communication::SerialController;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ScanType {
@@ -36,7 +36,7 @@ pub struct State {
     center_x: f32,
     center_y: f32,
     calibrate_before_scan: bool,
-    serial_controller: Option<Arc<Mutex<SerialController>>>,
+    serial_controller: Option<Arc<SerialController>>,
     status_message: String,
     scan_positions: Vec<(f32, f32)>,
     current_position_index: usize,
@@ -65,8 +65,12 @@ impl State {
         }
     }
 
-    pub fn set_serial_controller(&mut self, controller: Arc<Mutex<SerialController>>) {
+    pub fn set_serial_controller(&mut self, controller: Arc<SerialController>) {
         self.serial_controller = Some(controller);
+    }
+
+    pub fn clear_serial_controller(&mut self) {
+        self.serial_controller = None;
     }
 
     pub fn update(&mut self, message: Message) {
@@ -77,29 +81,7 @@ impl State {
                 self.current_position_index = 0;
                 self.scan_progress = 0.0;
                 self.is_scanning = true;
-                self.status_message = "Scanning...".to_string();
-                
-                // If we have a controller and need to calibrate
-                if let Some(ref controller) = self.serial_controller {
-                    if self.calibrate_before_scan {
-                        let _ = controller.lock().unwrap().send_controller_command(ControllerCommand::Home);
-                        // In a real implementation, we would wait for calibration to complete
-                        // before starting the scan
-                    }
-                    
-                    // Move to the first position if we have positions
-                    if !self.scan_positions.is_empty() {
-                        let (x, _y) = self.scan_positions[0];
-                        // Используем стандартную скорость 5 мм/с для сканирования
-                        let _ = controller.lock().unwrap().send_controller_command(
-                            ControllerCommand::Move { x_mm: x, speed_mm_s: 5.0 }
-                        );
-                        self.current_position_index = 1;
-                        if self.scan_positions.len() > 0 {
-                            self.scan_progress = 1.0 / self.scan_positions.len() as f32;
-                        }
-                    }
-                }
+                self.status_message = "Scanning pipeline not yet integrated".to_string();
             }
             Message::StopScan => {
                 self.is_scanning = false;
@@ -204,7 +186,8 @@ impl State {
     fn generate_concentric_circle_positions(&self) -> Vec<(f32, f32)> {
         let mut positions = Vec::new();
         let angular_step_rad = self.angular_step.to_radians();
-        let max_radius = ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
+        let max_radius =
+            ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
         let num_radii = (max_radius / self.step_size) as usize;
 
         for i in 1..=num_radii {
@@ -233,7 +216,8 @@ impl State {
     fn generate_spiral_positions(&self) -> Vec<(f32, f32)> {
         let mut positions = Vec::new();
         let angular_step_rad = self.angular_step.to_radians();
-        let max_radius = ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
+        let max_radius =
+            ((self.end_x - self.start_x).abs() / 2.0).min((self.end_y - self.start_y).abs() / 2.0);
         let mut radius = self.step_size;
         let mut angle = 0.0f32;
 
@@ -284,24 +268,32 @@ pub fn view(state: &State) -> Element<'_, Message> {
         row![
             text("Scan Type:").width(iced::Length::FillPortion(1)),
             scan_type_picklist.width(iced::Length::FillPortion(2)),
-        ].spacing(10),
+        ]
+        .spacing(10),
         text_input("Start X", &format!("{:.2}", state.start_x)).on_input(Message::UpdateStartX),
         text_input("Start Y", &format!("{:.2}", state.start_y)).on_input(Message::UpdateStartY),
         text_input("End X", &format!("{:.2}", state.end_x)).on_input(Message::UpdateEndX),
         text_input("End Y", &format!("{:.2}", state.end_y)).on_input(Message::UpdateEndY),
-        text_input("Step Size", &format!("{:.2}", state.step_size)).on_input(Message::UpdateStepSize),
+        text_input("Step Size", &format!("{:.2}", state.step_size))
+            .on_input(Message::UpdateStepSize),
     ]
     .spacing(10);
 
     // Additional parameters for concentric circle and spiral scans
-    let additional_params = if state.scan_type == ScanType::ConcentricCircle || state.scan_type == ScanType::Spiral {
+    let additional_params = if state.scan_type == ScanType::ConcentricCircle
+        || state.scan_type == ScanType::Spiral
+    {
         column![
             text("Circle/Spiral Parameters"),
             text_input("Radius", &format!("{:.2}", state.radius)).on_input(Message::UpdateRadius),
-            text_input("Angular Step (deg)", &format!("{:.2}", state.angular_step)).on_input(Message::UpdateAngularStep),
-            text_input("Center X", &format!("{:.2}", state.center_x)).on_input(Message::UpdateCenterX),
-            text_input("Center Y", &format!("{:.2}", state.center_y)).on_input(Message::UpdateCenterY),
-        ].spacing(10)
+            text_input("Angular Step (deg)", &format!("{:.2}", state.angular_step))
+                .on_input(Message::UpdateAngularStep),
+            text_input("Center X", &format!("{:.2}", state.center_x))
+                .on_input(Message::UpdateCenterX),
+            text_input("Center Y", &format!("{:.2}", state.center_y))
+                .on_input(Message::UpdateCenterY),
+        ]
+        .spacing(10)
     } else {
         column![].spacing(10)
     };
@@ -309,7 +301,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let controls = column![
         button("Start Scan").on_press(Message::StartScan),
         button("Stop Scan").on_press(Message::StopScan),
-        checkbox("Calibrate before scan", state.calibrate_before_scan).on_toggle(Message::ToggleCalibrateBeforeScan),
+        checkbox("Calibrate before scan", state.calibrate_before_scan)
+            .on_toggle(Message::ToggleCalibrateBeforeScan),
         text(format!("Status: {}", state.status_message)),
         text(format!("Progress: {:.0}%", state.scan_progress * 100.0)),
         progress_bar(0.0..=1.0, state.scan_progress),
@@ -317,13 +310,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     ]
     .spacing(10);
 
-    let layout = column![
-        params,
-        additional_params,
-        controls,
-    ]
-    .spacing(10)
-    .padding(10);
+    let layout = column![params, additional_params, controls,]
+        .spacing(10)
+        .padding(10);
 
     layout.into()
 }

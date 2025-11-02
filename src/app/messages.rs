@@ -1,13 +1,13 @@
 // Система сообщений Iced для приложения
 
-use std::sync::{Arc, Mutex};
 use crate::hardware::serial_communication::SerialController;
-use crate::ui::controller;
 use crate::ui::camera;
-use crate::ui::scanning;
-use crate::ui::visualization;
-use crate::ui::settings;
+use crate::ui::controller;
 use crate::ui::debug;
+use crate::ui::scanning;
+use crate::ui::settings;
+use crate::ui::visualization;
+use std::sync::Arc;
 
 /// Сообщения, которые приложение может обрабатывать
 #[derive(Debug, Clone)]
@@ -20,7 +20,6 @@ pub enum Message {
     Settings(settings::Message),
     Debug(debug::Message),
     /// Сообщение для совместного использования serial controller между модулями
-    SerialControllerConnected(Arc<Mutex<SerialController>>),
+    SerialControllerConnected(Arc<SerialController>),
     SerialControllerDisconnected,
 }
-

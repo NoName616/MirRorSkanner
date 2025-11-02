@@ -3,12 +3,12 @@
 use super::models::*;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
-use std::fs::File;
-use std::io::Write;
 
 // Используем простой парсер INI, так как пакет ini версии 1.3 имеет другой API
 // Для совместимости используем наш собственный парсер
@@ -19,7 +19,7 @@ fn parse_ini_file(path: &Path) -> Result<HashMap<String, HashMap<String, String>
     let mut result = HashMap::new();
     let mut current_section = HashMap::new();
     let mut section_name = String::from("default");
-    
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -29,11 +29,11 @@ fn parse_ini_file(path: &Path) -> Result<HashMap<String, HashMap<String, String>
             if !current_section.is_empty() {
                 result.insert(section_name.clone(), current_section);
             }
-            section_name = line[1..line.len()-1].to_string();
+            section_name = line[1..line.len() - 1].to_string();
             current_section = HashMap::new();
         } else if let Some(eq_pos) = line.find('=') {
             let key = line[..eq_pos].trim().to_string();
-            let value = line[eq_pos+1..].trim().to_string();
+            let value = line[eq_pos + 1..].trim().to_string();
             current_section.insert(key, value);
         }
     }
@@ -46,7 +46,7 @@ fn parse_ini_file(path: &Path) -> Result<HashMap<String, HashMap<String, String>
 // Сохранение INI-файла
 fn save_ini_file(path: &Path, data: &HashMap<String, HashMap<String, String>>) -> Result<()> {
     let mut file = File::create(path)?;
-    
+
     for (section_name, section) in data {
         writeln!(file, "[{}]", section_name)?;
         for (key, value) in section {
@@ -54,7 +54,7 @@ fn save_ini_file(path: &Path, data: &HashMap<String, HashMap<String, String>>) -
         }
         writeln!(file)?;
     }
-    
+
     Ok(())
 }
 
@@ -71,10 +71,9 @@ impl ConfigManager {
     /// Создает новый менеджер конфигурации
     pub fn new(config_dir: impl AsRef<Path>) -> Result<Self> {
         let config_dir = config_dir.as_ref().to_path_buf();
-        
+
         // Создаем директорию если не существует
-        std::fs::create_dir_all(&config_dir)
-            .context("Failed to create config directory")?;
+        std::fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
         let manager = Self {
             config_dir: config_dir.clone(),
@@ -102,7 +101,7 @@ impl ConfigManager {
     /// Загружает основную конфигурацию из config.cfg
     pub fn load_app_config(&self) -> Result<()> {
         let path = self.config_dir.join("config.cfg");
-        
+
         if !path.exists() {
             // Создаем дефолтный конфиг
             self.save_app_config()?;
@@ -150,19 +149,34 @@ impl ConfigManager {
         let config = self.app_config.read().unwrap();
 
         let mut ini_data = HashMap::new();
-        
+
         // Сохраняем [app]
         let mut app_section = HashMap::new();
         app_section.insert("version".to_string(), config.app.version.to_string());
-        app_section.insert("data_dir".to_string(), config.app.data_dir.to_string_lossy().to_string());
-        app_section.insert("logs_dir".to_string(), config.app.logs_dir.to_string_lossy().to_string());
+        app_section.insert(
+            "data_dir".to_string(),
+            config.app.data_dir.to_string_lossy().to_string(),
+        );
+        app_section.insert(
+            "logs_dir".to_string(),
+            config.app.logs_dir.to_string_lossy().to_string(),
+        );
         ini_data.insert("app".to_string(), app_section);
 
         // Сохраняем [io]
         let mut io_section = HashMap::new();
-        io_section.insert("controller_poll_ms".to_string(), config.io.controller_poll_ms.to_string());
-        io_section.insert("camera_poll_ms".to_string(), config.io.camera_poll_ms.to_string());
-        io_section.insert("serial_read_timeout_ms".to_string(), config.io.serial_read_timeout_ms.to_string());
+        io_section.insert(
+            "controller_poll_ms".to_string(),
+            config.io.controller_poll_ms.to_string(),
+        );
+        io_section.insert(
+            "camera_poll_ms".to_string(),
+            config.io.camera_poll_ms.to_string(),
+        );
+        io_section.insert(
+            "serial_read_timeout_ms".to_string(),
+            config.io.serial_read_timeout_ms.to_string(),
+        );
         ini_data.insert("io".to_string(), io_section);
 
         save_ini_file(&path, &ini_data)
@@ -174,14 +188,14 @@ impl ConfigManager {
     /// Загружает конфигурацию сканирования из config_scan.cfg
     pub fn load_scan_config(&self) -> Result<()> {
         let path = self.config_dir.join("config_scan.cfg");
-        
+
         if !path.exists() {
             self.save_scan_config()?;
             return Ok(());
         }
 
-        let ini = parse_ini_file(&path)
-            .with_context(|| format!("Failed to load config_scan.cfg"))?;
+        let ini =
+            parse_ini_file(&path).with_context(|| format!("Failed to load config_scan.cfg"))?;
 
         let mut config = ScanConfig::default();
 
@@ -222,7 +236,10 @@ impl ConfigManager {
         scan_section.insert("angle".to_string(), config.scan.angle.clone());
         scan_section.insert("dwell_ms".to_string(), config.scan.dwell_ms.to_string());
         scan_section.insert("order".to_string(), config.scan.order.clone());
-        scan_section.insert("fast_image_mode".to_string(), config.scan.fast_image_mode.to_string());
+        scan_section.insert(
+            "fast_image_mode".to_string(),
+            config.scan.fast_image_mode.to_string(),
+        );
         ini_data.insert("scan".to_string(), scan_section);
 
         save_ini_file(&path, &ini_data)
@@ -234,7 +251,7 @@ impl ConfigManager {
     /// Загружает конфигурацию калибровки контроллера
     pub fn load_controller_calibration(&self) -> Result<()> {
         let path = self.config_dir.join("calibration_controll.cfg");
-        
+
         if !path.exists() {
             self.save_controller_calibration()?;
             return Ok(());
@@ -288,16 +305,41 @@ impl ConfigManager {
 
         let mut ini_data = HashMap::new();
         let mut mechanics_section = HashMap::new();
-        mechanics_section.insert("steps_per_rev".to_string(), config.mechanics.steps_per_rev.to_string());
-        mechanics_section.insert("lead_screw_pitch_mm".to_string(), config.mechanics.lead_screw_pitch_mm.to_string());
-        mechanics_section.insert("microsteps".to_string(), config.mechanics.microsteps.to_string());
-        mechanics_section.insert("pulses_per_mm".to_string(), config.mechanics.pulses_per_mm.to_string());
-        mechanics_section.insert("encoder_cpr".to_string(), config.mechanics.encoder_cpr.to_string());
-        mechanics_section.insert("pulses_per_degree".to_string(), config.mechanics.pulses_per_degree.to_string());
-        mechanics_section.insert("homing_speed_mm_s".to_string(), config.mechanics.homing_speed_mm_s.to_string());
-        mechanics_section.insert("homing_offsets_mm".to_string(), format!("{},{}", 
-            config.mechanics.homing_offsets_mm.0, 
-            config.mechanics.homing_offsets_mm.1));
+        mechanics_section.insert(
+            "steps_per_rev".to_string(),
+            config.mechanics.steps_per_rev.to_string(),
+        );
+        mechanics_section.insert(
+            "lead_screw_pitch_mm".to_string(),
+            config.mechanics.lead_screw_pitch_mm.to_string(),
+        );
+        mechanics_section.insert(
+            "microsteps".to_string(),
+            config.mechanics.microsteps.to_string(),
+        );
+        mechanics_section.insert(
+            "pulses_per_mm".to_string(),
+            config.mechanics.pulses_per_mm.to_string(),
+        );
+        mechanics_section.insert(
+            "encoder_cpr".to_string(),
+            config.mechanics.encoder_cpr.to_string(),
+        );
+        mechanics_section.insert(
+            "pulses_per_degree".to_string(),
+            config.mechanics.pulses_per_degree.to_string(),
+        );
+        mechanics_section.insert(
+            "homing_speed_mm_s".to_string(),
+            config.mechanics.homing_speed_mm_s.to_string(),
+        );
+        mechanics_section.insert(
+            "homing_offsets_mm".to_string(),
+            format!(
+                "{},{}",
+                config.mechanics.homing_offsets_mm.0, config.mechanics.homing_offsets_mm.1
+            ),
+        );
         ini_data.insert("mechanics".to_string(), mechanics_section);
 
         save_ini_file(&path, &ini_data)
@@ -309,7 +351,7 @@ impl ConfigManager {
     /// Загружает конфигурацию калибровки камеры
     pub fn load_camera_calibration(&self) -> Result<()> {
         let path = self.config_dir.join("calibration_cam.cfg");
-        
+
         if !path.exists() {
             // Калибровка камеры может отсутствовать
             *self.camera_calib_config.write().unwrap() = None;
@@ -352,29 +394,39 @@ impl ConfigManager {
             }
         }
 
-        *self.camera_calib_config.write().unwrap() = Some(CameraCalibrationConfig {
-            camera: config,
-        });
+        *self.camera_calib_config.write().unwrap() =
+            Some(CameraCalibrationConfig { camera: config });
         Ok(())
     }
 
     /// Сохраняет конфигурацию калибровки камеры
     pub fn save_camera_calibration(&self) -> Result<()> {
         let path = self.config_dir.join("calibration_cam.cfg");
-        
+
         let config_opt = self.camera_calib_config.read().unwrap();
         if let Some(config) = config_opt.as_ref() {
             let mut ini_data = HashMap::new();
             let mut camera_section = HashMap::new();
-            let transform_str = format!("[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}]",
-                config.camera.transform[0], config.camera.transform[1], config.camera.transform[2],
-                config.camera.transform[3], config.camera.transform[4], config.camera.transform[5],
-                config.camera.transform[6], config.camera.transform[7], config.camera.transform[8]);
+            let transform_str = format!(
+                "[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}]",
+                config.camera.transform[0],
+                config.camera.transform[1],
+                config.camera.transform[2],
+                config.camera.transform[3],
+                config.camera.transform[4],
+                config.camera.transform[5],
+                config.camera.transform[6],
+                config.camera.transform[7],
+                config.camera.transform[8]
+            );
 
             camera_section.insert("model".to_string(), config.camera.model.clone());
             camera_section.insert("transform".to_string(), transform_str);
             camera_section.insert("roi".to_string(), config.camera.roi.clone());
-            camera_section.insert("cell_size_px".to_string(), config.camera.cell_size_px.to_string());
+            camera_section.insert(
+                "cell_size_px".to_string(),
+                config.camera.cell_size_px.to_string(),
+            );
             camera_section.insert("version".to_string(), config.camera.version.to_string());
             ini_data.insert("camera".to_string(), camera_section);
 
@@ -417,16 +469,20 @@ impl ConfigManager {
                 // Проверяем изменения в основных конфигах
                 let config_path = config_dir.join("config.cfg");
                 if config_path.exists() {
-                    if let Ok(_modified) = std::fs::metadata(&config_path)
-                        .and_then(|m| m.modified()) {
+                    if let Ok(_modified) =
+                        std::fs::metadata(&config_path).and_then(|m| m.modified())
+                    {
                         // Простая проверка: если файл изменился, перезагружаем
-                        let _ = Self { 
+                        let _ = Self {
                             config_dir: config_dir.clone(),
                             app_config: app_config.clone(),
                             scan_config: scan_config.clone(),
                             camera_calib_config: Arc::new(RwLock::new(None)),
-                            controller_calib_config: Arc::new(RwLock::new(ControllerCalibrationConfig::default())),
-                        }.load_app_config();
+                            controller_calib_config: Arc::new(RwLock::new(
+                                ControllerCalibrationConfig::default(),
+                            )),
+                        }
+                        .load_app_config();
                     }
                 }
 
@@ -437,8 +493,11 @@ impl ConfigManager {
                         app_config: app_config.clone(),
                         scan_config: scan_config.clone(),
                         camera_calib_config: Arc::new(RwLock::new(None)),
-                        controller_calib_config: Arc::new(RwLock::new(ControllerCalibrationConfig::default())),
-                    }.load_scan_config();
+                        controller_calib_config: Arc::new(RwLock::new(
+                            ControllerCalibrationConfig::default(),
+                        )),
+                    }
+                    .load_scan_config();
                 }
             }
         });

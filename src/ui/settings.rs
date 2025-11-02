@@ -46,7 +46,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let settings = column![
         text("Settings"),
         text_input("Camera Port", &state.camera_port).on_input(Message::UpdateCameraPort),
-        text_input("Controller Port", &state.controller_port).on_input(Message::UpdateControllerPort),
+        text_input("Controller Port", &state.controller_port)
+            .on_input(Message::UpdateControllerPort),
         text_input("Log Level", &state.log_level).on_input(Message::UpdateLogLevel),
         button("Save").on_press(Message::Save),
     ]

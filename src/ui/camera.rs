@@ -1,7 +1,7 @@
+use crate::hardware::camera::{OptrisCamera, SharedCamera};
+use anyhow::Result as AnyhowResult;
 use iced::Element;
 use std::sync::{Arc, Mutex};
-use anyhow::Result as AnyhowResult;
-use crate::hardware::camera::{OptrisCamera, SharedCamera};
 
 pub struct State {
     is_connected: bool,
@@ -36,18 +36,17 @@ impl State {
 
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::Connect => {
-                match self.connect() {
-                    Ok(_) => {
-                        self.is_connected = true;
-                        self.status_message = format!("Connected to camera index {}", self.camera_index);
-                    }
-                    Err(e) => {
-                        self.status_message = format!("Connection failed: {}", e);
-                        self.is_connected = false;
-                    }
+            Message::Connect => match self.connect() {
+                Ok(_) => {
+                    self.is_connected = true;
+                    self.status_message =
+                        format!("Connected to camera index {}", self.camera_index);
                 }
-            }
+                Err(e) => {
+                    self.status_message = format!("Connection failed: {}", e);
+                    self.is_connected = false;
+                }
+            },
             Message::Disconnect => {
                 if let Some(ref camera) = self.camera {
                     if let Ok(mut cam) = camera.lock() {
@@ -70,18 +69,16 @@ impl State {
                     }
                 }
             }
-            Message::FrameReceived(result) => {
-                match result {
-                    Ok((temps, min, max)) => {
-                        self.frame_data = temps;
-                        self.temperature_min = min;
-                        self.temperature_max = max;
-                    }
-                    Err(e) => {
-                        self.status_message = format!("Frame error: {}", e);
-                    }
+            Message::FrameReceived(result) => match result {
+                Ok((temps, min, max)) => {
+                    self.frame_data = temps;
+                    self.temperature_min = min;
+                    self.temperature_max = max;
                 }
-            }
+                Err(e) => {
+                    self.status_message = format!("Frame error: {}", e);
+                }
+            },
             Message::UpdateCameraIndex(idx_str) => {
                 if let Ok(idx) = idx_str.parse::<u16>() {
                     self.camera_index = idx;
@@ -108,7 +105,7 @@ impl State {
 
     fn connect(&mut self) -> AnyhowResult<()> {
         let mut camera = OptrisCamera::new(self.camera_index);
-        
+
         let result = if self.instance_name.is_empty() {
             camera.init()
         } else {
@@ -123,27 +120,28 @@ impl State {
                 self.camera = Some(Arc::new(Mutex::new(camera)));
                 Ok(())
             }
-            Err(e) => {
-                Err(anyhow::anyhow!("Failed to connect camera: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("Failed to connect camera: {}", e)),
         }
     }
 
     fn acquire_frame(&self, camera: &SharedCamera) -> AnyhowResult<()> {
-        let cam = camera.lock().map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
-        let (raw_frame, _metadata) = cam.get_raw_frame(100)
+        let mut cam = camera
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+        let (raw_frame, _metadata) = cam
+            .get_raw_frame(100)
             .map_err(|e| anyhow::anyhow!("Failed to get frame: {}", e))?;
-        
+
         // Конвертируем в температуры
         let temperatures = cam.convert_to_temperature_celsius(&raw_frame);
-        
+
         // Находим min и max
         let _min_temp = temperatures.iter().fold(f32::MAX, |a, &b| a.min(b));
         let _max_temp = temperatures.iter().fold(f32::MIN, |a, &b| a.max(b));
-        
+
         // Обновляем состояние (это должно быть через сообщение)
         // Пока просто возвращаем успех
-        
+
         Ok(())
     }
 }
@@ -162,9 +160,9 @@ pub enum Message {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
-    use iced::widget::{column, row, text, text_input, button, checkbox, container};
-    use iced::{Length, theme};
-    
+    use iced::widget::{button, checkbox, column, container, row, text, text_input};
+    use iced::{theme, Length};
+
     let controls = column![
         text("Camera Control"),
         row![
@@ -172,13 +170,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
             text_input("0", &format!("{}", state.camera_index))
                 .on_input(Message::UpdateCameraIndex)
                 .width(100),
-        ].spacing(10),
+        ]
+        .spacing(10),
         row![
             text("Instance Name (optional):"),
             text_input("", &state.instance_name)
                 .on_input(Message::UpdateInstanceName)
                 .width(200),
-        ].spacing(10),
+        ]
+        .spacing(10),
         row![
             if state.is_connected {
                 button("Disconnect").on_press(Message::Disconnect)
@@ -186,29 +186,44 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 button("Connect").on_press(Message::Connect)
             },
             button("Get Frame").on_press(Message::GetFrame),
-        ].spacing(10),
+        ]
+        .spacing(10),
         checkbox("Fast Mode", state.fast_mode).on_toggle(Message::ToggleFastMode),
         text(format!("Status: {}", state.status_message)),
-        text(format!("Connection: {}", if state.is_connected { "Connected" } else { "Disconnected" })),
-        text(format!("Frame: {}x{}", state.frame_width, state.frame_height)),
-        text(format!("Temperatures: {}°C - {}°C", state.temperature_min, state.temperature_max)),
+        text(format!(
+            "Connection: {}",
+            if state.is_connected {
+                "Connected"
+            } else {
+                "Disconnected"
+            }
+        )),
+        text(format!(
+            "Frame: {}x{}",
+            state.frame_width, state.frame_height
+        )),
+        text(format!(
+            "Temperatures: {}°C - {}°C",
+            state.temperature_min, state.temperature_max
+        )),
     ]
     .spacing(10)
     .padding(10);
 
     let video_feed = if state.frame_width > 0 && state.frame_height > 0 {
         // В реальной реализации здесь будет отображение термического изображения
-        container(text(format!("Thermal Image\n{}x{} pixels\nT: {:.1}°C - {:.1}°C", 
-            state.frame_width, 
-            state.frame_height,
-            state.temperature_min,
-            state.temperature_max))
-            .size(16))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x()
-            .center_y()
-            .style(theme::Container::Box)
+        container(
+            text(format!(
+                "Thermal Image\n{}x{} pixels\nT: {:.1}°C - {:.1}°C",
+                state.frame_width, state.frame_height, state.temperature_min, state.temperature_max
+            ))
+            .size(16),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x()
+        .center_y()
+        .style(theme::Container::Box)
     } else {
         // Placeholder until the first frame is received
         container(text("No signal\nConnect camera and get frame").size(30))

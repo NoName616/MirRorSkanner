@@ -1,13 +1,13 @@
 // Глобальное состояние приложения
 
-use std::sync::{Arc, Mutex};
 use crate::hardware::serial_communication::SerialController;
-use crate::ui::controller;
 use crate::ui::camera;
-use crate::ui::scanning;
-use crate::ui::visualization;
-use crate::ui::settings;
+use crate::ui::controller;
 use crate::ui::debug;
+use crate::ui::scanning;
+use crate::ui::settings;
+use crate::ui::visualization;
+use std::sync::Arc;
 
 /// Глобальное состояние приложения MirrorScanner
 pub struct MirrorScanner {
@@ -18,7 +18,7 @@ pub struct MirrorScanner {
     pub visualization: visualization::State,
     pub settings: settings::State,
     pub debug: debug::State,
-    pub shared_serial_controller: Option<Arc<Mutex<SerialController>>>,
+    pub shared_serial_controller: Option<Arc<SerialController>>,
 }
 
 impl MirrorScanner {
@@ -35,4 +35,3 @@ impl MirrorScanner {
         }
     }
 }
-

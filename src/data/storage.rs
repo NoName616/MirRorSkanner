@@ -1,21 +1,21 @@
 // Хранение данных измерений и управление ими
 
 use crate::processing::TemperatureMeasurement;
-use serde::{Serialize, Deserialize};
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use chrono::{DateTime, Local};
 
 /// Хранилище данных измерений
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeasurementStorage {
     /// Список всех измерений
     pub measurements: Vec<TemperatureMeasurement>,
-    
+
     /// Метаданные сканирования
     pub metadata: ScanMetadata,
-    
+
     /// Статистика измерений
     pub statistics: MeasurementStatistics,
 }
@@ -25,16 +25,16 @@ pub struct MeasurementStorage {
 pub struct ScanMetadata {
     /// Дата и время начала сканирования
     pub start_time: DateTime<Local>,
-    
+
     /// Дата и время окончания сканирования
     pub end_time: Option<DateTime<Local>>,
-    
+
     /// Параметры сканирования
     pub scan_params: ScanParameters,
-    
+
     /// Калибровка контроллера (опционально)
     pub controller_calibration: Option<String>,
-    
+
     /// Калибровка камеры (опционально)
     pub camera_calibration: Option<String>,
 }
@@ -103,18 +103,28 @@ impl MeasurementStorage {
     /// Обновляет статистику при добавлении измерения
     fn update_statistics(&mut self, measurement: &TemperatureMeasurement) {
         self.statistics.total_count = self.measurements.len();
-        
+
         // Обновляем температуры
-        self.statistics.min_temp = self.statistics.min_temp.min(measurement.temp_min).min(measurement.temp_max);
-        self.statistics.max_temp = self.statistics.max_temp.max(measurement.temp_min).max(measurement.temp_max);
-        
+        self.statistics.min_temp = self
+            .statistics
+            .min_temp
+            .min(measurement.temp_min)
+            .min(measurement.temp_max);
+        self.statistics.max_temp = self
+            .statistics
+            .max_temp
+            .max(measurement.temp_min)
+            .max(measurement.temp_max);
+
         // Вычисляем среднюю температуру
-        let sum: f32 = self.measurements.iter()
+        let sum: f32 = self
+            .measurements
+            .iter()
             .map(|m| m.temp_min + m.temp_max)
             .sum();
         let count = self.measurements.len() as f32 * 2.0;
         self.statistics.avg_temp = if count > 0.0 { sum / count } else { 0.0 };
-        
+
         // Обновляем координаты
         self.statistics.min_x = self.statistics.min_x.min(measurement.x_mm);
         self.statistics.max_x = self.statistics.max_x.max(measurement.x_mm);
@@ -131,27 +141,30 @@ impl MeasurementStorage {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize: {}", e))?;
-        
-        fs::write(path, json)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
-        
+
+        fs::write(path, json).map_err(|e| format!("Failed to write file: {}", e))?;
+
         Ok(())
     }
 
     /// Загружает хранилище из файла
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
-        let contents = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        
-        let storage: Self = serde_json::from_str(&contents)
-            .map_err(|e| format!("Failed to deserialize: {}", e))?;
-        
+        let contents =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+        let storage: Self =
+            serde_json::from_str(&contents).map_err(|e| format!("Failed to deserialize: {}", e))?;
+
         Ok(storage)
     }
 
     /// Получает измерения по фильтру
-    pub fn get_measurements_filtered(&self, filter: &MeasurementFilter) -> Vec<&TemperatureMeasurement> {
-        self.measurements.iter()
+    pub fn get_measurements_filtered(
+        &self,
+        filter: &MeasurementFilter,
+    ) -> Vec<&TemperatureMeasurement> {
+        self.measurements
+            .iter()
             .filter(|m| filter.matches(m))
             .collect()
     }
@@ -203,37 +216,37 @@ impl MeasurementFilter {
                 return false;
             }
         }
-        
+
         if let Some(max) = self.max_temp {
             if measurement.temp_min > max && measurement.temp_max > max {
                 return false;
             }
         }
-        
+
         if let Some(min) = self.min_x {
             if measurement.x_mm < min {
                 return false;
             }
         }
-        
+
         if let Some(max) = self.max_x {
             if measurement.x_mm > max {
                 return false;
             }
         }
-        
+
         if let Some(min) = self.min_y {
             if measurement.y_mm < min {
                 return false;
             }
         }
-        
+
         if let Some(max) = self.max_y {
             if measurement.y_mm > max {
                 return false;
             }
         }
-        
+
         true
     }
 }
@@ -250,7 +263,7 @@ impl StorageManager {
         let storage_dir = storage_dir.as_ref().to_path_buf();
         fs::create_dir_all(&storage_dir)
             .map_err(|e| format!("Failed to create storage directory: {}", e))?;
-        
+
         Ok(Self {
             storage_dir,
             active_storages: HashMap::new(),
@@ -258,7 +271,11 @@ impl StorageManager {
     }
 
     /// Создает новое хранилище для сканирования
-    pub fn create_storage(&mut self, scan_id: String, scan_params: ScanParameters) -> &mut MeasurementStorage {
+    pub fn create_storage(
+        &mut self,
+        scan_id: String,
+        scan_params: ScanParameters,
+    ) -> &mut MeasurementStorage {
         let storage = MeasurementStorage::new(scan_params);
         let scan_id_clone = scan_id.clone();
         self.active_storages.insert(scan_id, storage);
@@ -295,4 +312,3 @@ impl StorageManager {
         self.active_storages.remove(scan_id);
     }
 }
-

@@ -41,21 +41,25 @@ impl AngleDMS {
     /// Примеры: "12:30:45", "-5:15:30", "0:1:0"
     pub fn from_str(s: &str) -> Result<Self, AngleParseError> {
         let parts: Vec<&str> = s.split(':').collect();
-        
+
         if parts.len() != 3 {
-            return Err(AngleParseError::InvalidFormat(
-                format!("Expected format 'd:m:s', got '{}'", s)
-            ));
+            return Err(AngleParseError::InvalidFormat(format!(
+                "Expected format 'd:m:s', got '{}'",
+                s
+            )));
         }
 
-        let degrees = parts[0].parse::<i32>()
+        let degrees = parts[0]
+            .parse::<i32>()
             .map_err(|_| AngleParseError::InvalidNumber(parts[0].to_string()))?;
-        
-        let minutes = parts[1].parse::<u8>()
+
+        let minutes = parts[1]
+            .parse::<u8>()
             .map_err(|_| AngleParseError::InvalidNumber(parts[1].to_string()))?
             .min(59);
-        
-        let seconds = parts[2].parse::<u8>()
+
+        let seconds = parts[2]
+            .parse::<u8>()
             .map_err(|_| AngleParseError::InvalidNumber(parts[2].to_string()))?
             .min(59);
 
@@ -69,7 +73,8 @@ impl AngleDMS {
             Self::from_str(s)
         } else {
             // Иначе парсим как число градусов
-            let degrees = s.parse::<f64>()
+            let degrees = s
+                .parse::<f64>()
                 .map_err(|_| AngleParseError::InvalidNumber(s.to_string()))?;
             Ok(Self::from_degrees(degrees))
         }
@@ -79,14 +84,14 @@ impl AngleDMS {
     pub fn from_degrees(degrees: f64) -> Self {
         let sign = if degrees < 0.0 { -1 } else { 1 };
         let abs_degrees = degrees.abs();
-        
+
         let d = abs_degrees.floor() as i32 * sign;
         let remainder = abs_degrees - abs_degrees.floor();
-        
+
         let total_seconds = (remainder * 3600.0).round() as u32;
         let m = (total_seconds / 60) as u8;
         let s = (total_seconds % 60) as u8;
-        
+
         Self::new(d, m, s)
     }
 }
@@ -132,7 +137,7 @@ mod tests {
     #[test]
     fn test_to_degrees() {
         let angle = AngleDMS::new(12, 30, 45);
-        let expected = 12.0 + 30.0/60.0 + 45.0/3600.0;
+        let expected = 12.0 + 30.0 / 60.0 + 45.0 / 3600.0;
         assert!((angle.to_degrees() - expected).abs() < 0.0001);
     }
 
@@ -148,7 +153,6 @@ mod tests {
     fn test_format_zero() {
         let angle = AngleDMS::from_str("0:1:0").unwrap();
         assert_eq!(angle.to_string(), "0:1:0");
-        assert!((angle.to_degrees() - 1.0/60.0).abs() < 0.0001);
+        assert!((angle.to_degrees() - 1.0 / 60.0).abs() < 0.0001);
     }
 }
-
