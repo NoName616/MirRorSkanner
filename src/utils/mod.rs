@@ -8,4 +8,3 @@ pub mod units;
 
 // Re-export for external use
 pub use angle::AngleDMS;
-pub use error_handling::{AppError, AppResult, HardwareError, HardwareResult};

@@ -64,16 +64,31 @@ impl Application for MirrorScanner {
 
                 command.map(Message::Controller)
             }
-            Message::Camera(msg) => self.camera.update(msg).map(Message::Camera),
-            Message::Scanning(msg) => {
-                // Handle scanning messages
-                self.scanning.update(msg);
+            Message::Camera(msg) => {
+                let command = self.camera.update(msg);
 
-                // If we have a shared controller, set it for the scanning module
+                if let Some(service) = self.camera.camera_service() {
+                    self.shared_camera_service = Some(service.clone());
+                    self.scanning.set_camera_service(service);
+                } else {
+                    self.shared_camera_service = None;
+                    self.scanning.clear_camera_service();
+                }
+
+                command.map(Message::Camera)
+            }
+            Message::Scanning(msg) => {
+                let command = self.scanning.update(msg);
+
                 if let Some(ref controller) = self.shared_serial_controller {
                     self.scanning.set_serial_controller(controller.clone());
                 }
-                Command::none()
+
+                if let Some(ref camera) = self.shared_camera_service {
+                    self.scanning.set_camera_service(camera.clone());
+                }
+
+                command.map(Message::Scanning)
             }
             Message::Visualization(msg) => {
                 self.visualization.update(msg);
@@ -98,6 +113,7 @@ impl Application for MirrorScanner {
             }
             Message::SerialControllerDisconnected => {
                 self.shared_serial_controller = None;
+                self.scanning.clear_serial_controller();
                 Command::none()
             }
         }

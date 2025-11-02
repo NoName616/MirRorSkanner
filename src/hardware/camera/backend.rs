@@ -40,7 +40,7 @@ pub struct RawFrame {
     pub metadata: CameraFrameMetadata,
 }
 
-/// Conversion parameters for translating ADU values into ?C.
+/// Conversion parameters for translating ADU values into degrees Celsius.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TemperatureConversion {
     pub scale: f32,

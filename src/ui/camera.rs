@@ -86,43 +86,42 @@ impl State {
                         self.camera = Some(service);
                         self.last_frame = None;
                         if self.streaming_enabled {
-                            self.schedule_next_capture()
-                        } else {
-                            Command::none()
+                            return self.schedule_next_capture();
                         }
                     }
                     Err(err) => {
                         self.camera = None;
                         self.status_message = format!("Camera connection failed: {}", err);
-                        Command::none()
+                        return Command::none();
                     }
                 }
+                Command::none()
             }
             Message::DisconnectPressed => {
                 self.camera = None;
                 self.last_frame = None;
                 self.status_message = "Camera disconnected".into();
-                Command::none()
+                return Command::none();
             }
             Message::ToggleFastMode(value) => {
                 self.fast_mode = value;
                 if self.streaming_enabled && self.camera.is_some() {
-                    self.schedule_next_capture()
+                    return self.schedule_next_capture();
                 } else {
-                    Command::none()
+                    return Command::none();
                 }
             }
             Message::ToggleStreaming(value) => {
                 self.streaming_enabled = value;
                 if value && self.camera.is_some() {
-                    self.schedule_next_capture()
+                    return self.schedule_next_capture();
                 } else {
                     self.status_message = if value {
                         "Streaming enabled".into()
                     } else {
                         "Streaming paused".into()
                     };
-                    Command::none()
+                    return Command::none();
                 }
             }
             Message::FrameCaptured(result) => {
@@ -130,7 +129,7 @@ impl State {
                     Ok(frame) => {
                         self.dimensions = Some((frame.width as i32, frame.height as i32, 1));
                         self.status_message = format!(
-                            "Frame received ({}x{}) | {:.2}?C .. {:.2}?C",
+                            "Frame received ({}x{}) | {:.2} degC .. {:.2} degC",
                             frame.width, frame.height, frame.min_temp, frame.max_temp
                         );
                         self.last_frame = Some(frame);
@@ -141,10 +140,9 @@ impl State {
                 }
 
                 if self.streaming_enabled && self.camera.is_some() {
-                    self.schedule_next_capture()
-                } else {
-                    Command::none()
+                    return self.schedule_next_capture();
                 }
+                Command::none()
             }
         }
     }
@@ -175,6 +173,10 @@ impl State {
         } else {
             CameraMode::Precise(PreciseModeSettings::default())
         }
+    }
+
+    pub fn camera_service(&self) -> Option<Arc<CameraService>> {
+        self.camera.clone()
     }
 }
 
@@ -257,7 +259,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             text(format!("Resolution: {}x{}", frame.width, frame.height)),
             text(format!("Mode: {:?}", frame.mode)),
             text(format!(
-                "Temperature range: {:.2}?C .. {:.2}?C",
+                "Temperature range: {:.2} degC .. {:.2} degC",
                 frame.min_temp, frame.max_temp
             )),
             text(format!("Frame counter: {}", frame.metadata.frame_counter)),

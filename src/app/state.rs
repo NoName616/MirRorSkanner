@@ -1,5 +1,6 @@
 // Глобальное состояние приложения
 
+use crate::hardware::camera::CameraService;
 use crate::hardware::serial_communication::SerialController;
 use crate::ui::camera;
 use crate::ui::controller;
@@ -19,6 +20,7 @@ pub struct MirrorScanner {
     pub settings: settings::State,
     pub debug: debug::State,
     pub shared_serial_controller: Option<Arc<SerialController>>,
+    pub shared_camera_service: Option<Arc<CameraService>>,
 }
 
 impl MirrorScanner {
@@ -32,6 +34,7 @@ impl MirrorScanner {
             settings: settings::State::new(),
             debug: debug::State::new(),
             shared_serial_controller: None,
+            shared_camera_service: None,
         }
     }
 }

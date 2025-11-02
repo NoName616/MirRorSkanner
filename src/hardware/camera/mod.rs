@@ -14,7 +14,7 @@ pub use backend::{
     TemperatureConversion,
 };
 pub use service::{
-    CameraFrame, CameraMode, CameraModeKind, CameraService, FastModeSettings, PreciseModeSettings,
+    CameraFrame, CameraMode, CameraService, FastModeSettings, PreciseModeSettings,
 };
 
 use backend::CameraBackend;
@@ -115,7 +115,7 @@ impl OptrisCamera {
         Ok((pixels, metadata))
     }
 
-    /// Convert raw ADU values into ?C using backend conversion parameters.
+    /// Convert raw ADU values into degrees Celsius using backend conversion parameters.
     pub fn convert_to_temperature_celsius(&self, raw_data: &[u16]) -> Vec<f32> {
         convert_raw_to_temperature(raw_data, self.conversion)
     }

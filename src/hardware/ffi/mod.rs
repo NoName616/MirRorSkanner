@@ -10,4 +10,5 @@ pub use windows::*;
 mod stub;
 
 #[cfg(not(target_os = "windows"))]
+#[allow(unused_imports)]
 pub use stub::*;
