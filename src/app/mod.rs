@@ -64,10 +64,7 @@ impl Application for MirrorScanner {
 
                 command.map(Message::Controller)
             }
-            Message::Camera(msg) => {
-                self.camera.update(msg);
-                Command::none()
-            }
+            Message::Camera(msg) => self.camera.update(msg).map(Message::Camera),
             Message::Scanning(msg) => {
                 // Handle scanning messages
                 self.scanning.update(msg);

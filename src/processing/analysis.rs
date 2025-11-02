@@ -125,6 +125,19 @@ impl FastImageAnalyzer {
         }
     }
 
+    /// Создает быстрый анализатор с заданным коэффициентом даунсэмплинга
+    pub fn with_downscale_factor(factor: u32) -> Self {
+        let factor = factor.max(1);
+        Self {
+            downscale_factor: factor,
+        }
+    }
+
+    /// Возвращает текущий коэффициент даунсэмплинга
+    pub fn downscale_factor(&self) -> u32 {
+        self.downscale_factor
+    }
+
     /// Анализирует изображение в быстром режиме
     /// Возвращает минимальную и максимальную температуру из ROI
     pub fn analyze_fast(
@@ -165,6 +178,19 @@ impl PreciseImageAnalyzer {
         Self {
             median_kernel_size: 3,
         }
+    }
+
+    /// Создает точный анализатор с заданным размером медианного ядра
+    pub fn with_kernel_size(size: u32) -> Self {
+        let size = if size % 2 == 0 { size + 1 } else { size }.max(1);
+        Self {
+            median_kernel_size: size,
+        }
+    }
+
+    /// Возвращает размер медианного ядра
+    pub fn kernel_size(&self) -> u32 {
+        self.median_kernel_size
     }
 
     /// Анализирует изображение в точном режиме

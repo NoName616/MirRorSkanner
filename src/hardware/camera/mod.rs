@@ -1,10 +1,10 @@
 mod backend;
 mod mock;
+mod service;
 
 #[cfg(target_os = "windows")]
 mod optris;
 
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -13,10 +13,11 @@ pub use backend::{
     convert_raw_to_temperature, CameraError, CameraFrameMetadata, FrameDimensions, RawFrame,
     TemperatureConversion,
 };
+pub use service::{
+    CameraFrame, CameraMode, CameraModeKind, CameraService, FastModeSettings, PreciseModeSettings,
+};
 
 use backend::CameraBackend;
-
-pub type SharedCamera = Arc<Mutex<OptrisCamera>>;
 
 /// Runtime camera abstraction that selects an appropriate backend at startup.
 pub struct OptrisCamera {
@@ -94,6 +95,11 @@ impl OptrisCamera {
         )
     }
 
+    /// Returns cached frame dimensions as a struct.
+    pub fn frame_dimensions(&self) -> FrameDimensions {
+        self.dimensions
+    }
+
     /// Acquire a raw frame with the provided timeout (milliseconds).
     pub fn get_raw_frame(&mut self, timeout_ms: u16) -> Result<(Vec<u16>, CameraFrameMetadata)> {
         if !self.is_initialized {
@@ -112,6 +118,11 @@ impl OptrisCamera {
     /// Convert raw ADU values into ?C using backend conversion parameters.
     pub fn convert_to_temperature_celsius(&self, raw_data: &[u16]) -> Vec<f32> {
         convert_raw_to_temperature(raw_data, self.conversion)
+    }
+
+    /// Returns the active temperature conversion coefficients.
+    pub fn temperature_conversion(&self) -> TemperatureConversion {
+        self.conversion
     }
 
     /// Retrieve the camera chip temperature (if available).
@@ -166,11 +177,6 @@ fn create_backend(index: u16) -> Box<dyn CameraBackend> {
         Some(name) if name.eq_ignore_ascii_case("optris") => select_optris_backend(index),
         _ => select_optris_backend(index),
     }
-}
-
-/// Convenience constructor producing a shared camera handle.
-pub fn shared_camera(index: u16) -> SharedCamera {
-    Arc::new(Mutex::new(OptrisCamera::new(index)))
 }
 
 fn select_optris_backend(index: u16) -> Box<dyn CameraBackend> {

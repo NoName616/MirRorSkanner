@@ -57,7 +57,7 @@ impl Default for TemperatureConversion {
 }
 
 /// Common camera backend errors.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum CameraError {
     #[error("Camera backend not available on this platform")]
     Unsupported,
